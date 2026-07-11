@@ -1,0 +1,81 @@
+name: Validate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repository:
+    name: Repository checks
+    runs-on: macos-15
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Validate shell scripts
+        run: |
+          set -eu
+          for script in Scripts/*.sh; do
+            sh -n "$script"
+            test -x "$script"
+          done
+
+      - name: Validate plugin descriptor
+        run: |
+          ruby -rjson -e '
+            descriptor = JSON.parse(File.read("LiveKitBridge.uplugin"))
+            abort "unexpected plugin name" unless descriptor.fetch("FriendlyName") == "LiveKit for Unreal (Community)"
+            abort "unexpected engine version" unless descriptor.fetch("EngineVersion") == "5.8.0"
+            abort "source descriptor must not be installed" unless descriptor.fetch("Installed") == false
+            abort "unexpected platforms" unless descriptor.fetch("SupportedTargetPlatforms").sort == %w[IOS Mac]
+            module_descriptor = descriptor.fetch("Modules").find { |entry| entry.fetch("Name") == "LiveKitBridge" }
+            abort "LiveKitBridge module is missing" unless module_descriptor
+            abort "unexpected module platforms" unless module_descriptor.fetch("PlatformAllowList").sort == %w[IOS Mac]
+          '
+
+      - name: Validate dependency lock
+        run: |
+          set -eu
+          . Source/ThirdParty/Apple/dependencies.lock
+          test "$LIVEKIT_VERSION" = "2.15.1"
+          test "$LIVEKIT_WEBRTC_VERSION" = "144.7559.10"
+          test "$RUST_LIVEKIT_UNIFFI_VERSION" = "0.0.6"
+          printf '%s\n' "$LIVEKIT_SHA256" "$LIVEKIT_WEBRTC_SHA256" "$RUST_LIVEKIT_UNIFFI_SHA256" \
+            | while IFS= read -r checksum; do
+                printf '%s' "$checksum" | grep -Eq '^[0-9a-f]{64}$'
+              done
+
+      - name: Confirm release documentation
+        run: |
+          set -eu
+          test -s README.md
+          test -s CHANGELOG.md
+          test -s LICENSE
+          test -s NOTICE
+          test -s THIRD_PARTY_NOTICES.md
+          test -s THIRD_PARTY_COMPONENTS.json
+          grep -q '/Scripts/...' Config/FilterPlugin.ini
+          grep -q '/THIRD_PARTY_NOTICES.md' Config/FilterPlugin.ini
+          grep -q '/THIRD_PARTY_COMPONENTS.json' Config/FilterPlugin.ini
+
+      - name: Verify source-release compliance
+        run: Scripts/verify-release-compliance.sh source
+
+      - name: Reject generated binaries and credentials
+        run: |
+          set -eu
+          forbidden=$(git ls-files | grep -E '(^|/)(Binaries|Intermediate|Saved)/|Source/ThirdParty/Apple/.*\.xcframework\.zip$|Source/ThirdParty/Apple/(Headers|Mac|Facade)/|(^|/)LiveKit\.local\.json$|(^|/)\.env(\.|$)' || true)
+          if [ -n "$forbidden" ]; then
+            printf 'Generated or sensitive files are tracked:\n%s\n' "$forbidden" >&2
+            exit 1
+          fi
+
+      - name: Check whitespace
+        run: git diff --check

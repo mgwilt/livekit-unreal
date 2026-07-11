@@ -1,0 +1,35 @@
+# macOS and editors
+.DS_Store
+.idea/
+.vscode/
+*.code-workspace
+*.xcworkspace/
+*.xcuserstate
+
+# Unreal generated output
+/Binaries/
+/DerivedDataCache/
+/Intermediate/
+/Saved/
+/Dist/
+*.sln
+*.xcodeproj/
+
+# Downloaded and generated Apple dependencies
+/Source/ThirdParty/Apple/*.xcframework.zip
+/Source/ThirdParty/Apple/*.download
+/Source/ThirdParty/Apple/.extract/
+/Source/ThirdParty/Apple/.facade-build/
+/Source/ThirdParty/Apple/Headers/
+/Source/ThirdParty/Apple/Mac/
+/Source/ThirdParty/Apple/Facade/
+
+# Credentials never belong in the plugin repository
+.env
+.env.*
+LiveKit.local.json
+
+# Local release output
+LiveKitForUnreal-*.zip
+LiveKitForUnreal-*.zip.sha256
+release-audit.json

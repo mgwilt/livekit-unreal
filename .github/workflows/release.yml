@@ -1,0 +1,81 @@
+name: Package release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing v-prefixed release tag to package
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: livekit-unreal-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: UE 5.8 Apple package
+    runs-on: [self-hosted, macOS, ARM64, unreal-5.8]
+    environment: release
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          clean: true
+
+      - name: Validate tag and version
+        id: version
+        env:
+          REQUESTED_TAG: ${{ github.event.inputs.tag }}
+          REF_TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          if [ -n "$REQUESTED_TAG" ]; then
+            tag=$REQUESTED_TAG
+          else
+            tag=$REF_TAG
+          fi
+          version=$(awk -F'"' '/"VersionName"/ { print $4; exit }' LiveKitBridge.uplugin)
+          test "$tag" = "v$version"
+          git rev-parse --verify "refs/tags/$tag^{commit}" >/dev/null
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build, test, and archive
+        env:
+          UE_ROOT: /Users/Shared/Epic Games/UE_5.8
+          LIVEKIT_BINARY_RELEASE_APPROVED: "1"
+        run: Scripts/package-release.sh "$RUNNER_TEMP/release"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiveKitForUnreal-${{ steps.version.outputs.version }}-UE5.8-Apple
+          path: |
+            ${{ runner.temp }}/release/LiveKitForUnreal-${{ steps.version.outputs.version }}-UE5.8-Apple.zip
+            ${{ runner.temp }}/release/LiveKitForUnreal-${{ steps.version.outputs.version }}-UE5.8-Apple.zip.sha256
+          if-no-files-found: error
+
+      - name: Create or update draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -eu
+          archive="$RUNNER_TEMP/release/LiveKitForUnreal-$VERSION-UE5.8-Apple.zip"
+          checksum="$archive.sha256"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$archive" "$checksum" --clobber
+          else
+            gh release create "$TAG" "$archive" "$checksum" \
+              --draft \
+              --generate-notes \
+              --title "LiveKit for Unreal $VERSION"
+          fi

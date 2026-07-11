@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "release_policy": {
+    "source_publication": "approved",
+    "binary_redistribution": "blocked",
+    "binary_blocker": "RustLiveKitUniFFI 0.0.6 does not publish a reproducible source revision, Cargo.lock, SBOM, or transitive license inventory for its release binary."
+  },
+  "components": [
+    {
+      "name": "LiveKit Swift SDK",
+      "version": "2.15.1",
+      "source": "https://github.com/livekit/client-sdk-swift/tree/2.15.1",
+      "artifact_source": "https://github.com/livekit/client-sdk-swift-xcframework",
+      "license": "Apache-2.0",
+      "runtime": true,
+      "notice": "Copyright 2023 LiveKit, Inc."
+    },
+    {
+      "name": "LiveKitWebRTC XCFramework wrapper",
+      "version": "144.7559.10",
+      "source": "https://github.com/livekit/webrtc-xcframework/tree/144.7559.10",
+      "license": "MIT",
+      "runtime": true
+    },
+    {
+      "name": "WebRTC",
+      "version": "m144.7559.10",
+      "source": "https://github.com/webrtc-sdk/webrtc-build/releases/tag/m144.7559.10",
+      "license": "BSD-3-Clause",
+      "runtime": true
+    },
+    {
+      "name": "RustLiveKitUniFFI XCFramework wrapper",
+      "version": "0.0.6",
+      "source": "https://github.com/livekit/livekit-uniffi-xcframework/tree/0.0.6",
+      "license": "Apache-2.0",
+      "runtime": true,
+      "transitive_inventory": "unavailable-upstream",
+      "binary_redistribution_approved": false
+    },
+    {
+      "name": "SwiftProtobuf",
+      "version_requirement": ">=1.31.0",
+      "source": "https://github.com/apple/swift-protobuf",
+      "license": "Apache-2.0 WITH Swift-exception",
+      "runtime": true
+    },
+    {
+      "name": "Swift DocC Plugin",
+      "version_requirement": ">=1.3.0",
+      "source": "https://github.com/apple/swift-docc-plugin",
+      "license": "Apache-2.0",
+      "runtime": false,
+      "redistributed": false
+    }
+  ]
+}

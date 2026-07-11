@@ -1,0 +1,12 @@
+{
+  "FileVersion": 3,
+  "EngineAssociation": "5.8",
+  "Category": "Tests",
+  "Description": "Blueprint-only smoke project for the packaged LiveKitBridge plugin.",
+  "Plugins": [
+    {
+      "Name": "LiveKitBridge",
+      "Enabled": true
+    }
+  ]
+}
