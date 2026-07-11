@@ -454,6 +454,10 @@ void FLiveKitAppleBridge::PublishData(
     const TArray<FString>& DestinationIdentities)
 {
 #if WITH_LIVEKIT_APPLE
+    // Objective-C completion blocks can outlive this call. A block capture of a
+    // C++ reference parameter preserves the reference rather than the FString,
+    // so keep an owned value for the eventual result callback.
+    const FString OwnedOperationId = OperationId;
     NSMutableArray<ParticipantIdentity*>* Destinations = [NSMutableArray array];
     for (const FString& Identity : DestinationIdentities)
     {
@@ -475,7 +479,7 @@ void FLiveKitAppleBridge::PublishData(
             if (FSharedLiveKitBridge Bridge = WeakBridge.Pin())
             {
                 Bridge->NotifyPublishResult(
-                    OperationId,
+                    OwnedOperationId,
                     error == nil,
                     error ? MakeLiveKitError(TEXT("publish_failed"), error) : FLiveKitError());
             }
@@ -653,6 +657,9 @@ void FLiveKitAppleBridge::PerformRpc(
     float MaxRoundTripLatencySeconds)
 {
 #if WITH_LIVEKIT_APPLE
+    // The SDK completes asynchronously. Capturing the const reference parameter
+    // directly leaves the block pointing at the caller's expired stack frame.
+    const FString OwnedRequestId = RequestId;
     FWeakLiveKitBridge WeakBridge = AsShared();
     [Implementation->SwiftFacade
         performRpcWithDestinationIdentity:ToNSString(DestinationIdentity)
@@ -665,7 +672,7 @@ void FLiveKitAppleBridge::PerformRpc(
             if (FSharedLiveKitBridge Bridge = WeakBridge.Pin())
             {
                 Bridge->NotifyRpcResult(
-                    RequestId,
+                    OwnedRequestId,
                     error == nil,
                     FromNSString(response),
                     error ? MakeRpcError(error) : FLiveKitError());
