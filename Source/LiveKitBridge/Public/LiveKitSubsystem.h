@@ -17,6 +17,10 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
     bool,
     bIsSpeaking);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FLiveKitDataReceivedEvent, const FLiveKitDataMessage&, Message);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
+    FLiveKitByteStreamReceivedEvent,
+    const FLiveKitByteStream&,
+    Stream);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FLiveKitRpcInvocationEvent, const FLiveKitRpcInvocation&, Invocation);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(
     FLiveKitRpcResultEvent,
@@ -90,6 +94,13 @@ public:
         ELiveKitDataReliability Reliability,
         const TArray<FString>& DestinationIdentities);
 
+    /** Register one completed-byte-stream receiver for an exact LiveKit topic. */
+    UFUNCTION(BlueprintCallable, Category="LiveKit|Byte Streams")
+    bool RegisterByteStreamHandler(const FString& Topic);
+
+    UFUNCTION(BlueprintCallable, Category="LiveKit|Byte Streams")
+    void UnregisterByteStreamHandler(const FString& Topic);
+
     UFUNCTION(BlueprintCallable, Category="LiveKit|RPC")
     bool RegisterRpcMethod(const FString& Method);
 
@@ -140,6 +151,10 @@ public:
     UPROPERTY(BlueprintAssignable, Category="LiveKit|Data")
     FLiveKitDataReceivedEvent OnDataReceived;
 
+    /** Fired after an incoming byte stream has been read completely. */
+    UPROPERTY(BlueprintAssignable, Category="LiveKit|Byte Streams")
+    FLiveKitByteStreamReceivedEvent OnByteStreamReceived;
+
     UPROPERTY(BlueprintAssignable, Category="LiveKit|RPC")
     FLiveKitRpcInvocationEvent OnRpcInvocation;
 
@@ -164,6 +179,7 @@ private:
     ELiveKitConnectionState ConnectionState = ELiveKitConnectionState::Disconnected;
     bool bMicrophoneEnabled = true;
     TMap<FString, FLiveKitParticipantInfo> RemoteParticipants;
+    TSet<FString> RegisteredByteStreamTopics;
     TSet<FString> RegisteredRpcMethods;
     TSharedPtr<FLiveKitAppleBridge> Bridge;
 };

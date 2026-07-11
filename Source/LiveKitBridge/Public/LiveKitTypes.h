@@ -3,6 +3,12 @@
 #include "CoreMinimal.h"
 #include "LiveKitTypes.generated.h"
 
+namespace LiveKitLimits
+{
+/** Hard safety cap applied while accumulating any incoming byte stream. */
+inline constexpr int32 MaxIncomingByteStreamBytes = 8 * 1024 * 1024;
+}
+
 UENUM(BlueprintType)
 enum class ELiveKitConnectionState : uint8
 {
@@ -69,6 +75,34 @@ struct LIVEKITBRIDGE_API FLiveKitDataMessage
     TArray<uint8> Data;
 
     FString AsString() const;
+};
+
+/** A fully received LiveKit byte stream and its sender-provided metadata. */
+USTRUCT(BlueprintType)
+struct LIVEKITBRIDGE_API FLiveKitByteStream
+{
+    GENERATED_BODY()
+
+    UPROPERTY(BlueprintReadOnly, Category="LiveKit")
+    FString SenderIdentity;
+
+    UPROPERTY(BlueprintReadOnly, Category="LiveKit")
+    FString StreamId;
+
+    UPROPERTY(BlueprintReadOnly, Category="LiveKit")
+    FString Topic;
+
+    UPROPERTY(BlueprintReadOnly, Category="LiveKit")
+    FString Name;
+
+    UPROPERTY(BlueprintReadOnly, Category="LiveKit")
+    FString MimeType;
+
+    UPROPERTY(BlueprintReadOnly, Category="LiveKit")
+    TMap<FString, FString> Attributes;
+
+    UPROPERTY(BlueprintReadOnly, Category="LiveKit")
+    TArray<uint8> Data;
 };
 
 USTRUCT(BlueprintType)

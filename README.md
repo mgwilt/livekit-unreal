@@ -6,20 +6,20 @@ This is a community-maintained integration. It is not an official LiveKit SDK an
 
 ## Status
 
-Version `0.1.0` targets:
+Version `0.2.0` targets:
 
 - Unreal Engine 5.8
 - macOS Editor and game builds
 - Physical iOS devices with a minimum deployment target of iOS 15
 - LiveKit Swift SDK 2.15.1
 - Microphone publishing and subscribed room audio
-- Participant, speaking-state, reliable/lossy data, and RPC Blueprint APIs
+- Participant, speaking-state, reliable/lossy data, incoming byte-stream, and RPC Blueprint APIs
 
-Video, screen sharing, Android, Windows, tvOS, visionOS, and a production token service are outside the 0.1 release.
+Video, screen sharing, Android, Windows, tvOS, visionOS, and a production token service are outside the 0.2 release.
 
 ## Prebuilt release status
 
-Prebuilt binaries are not published for 0.1.0. The pinned RustLiveKitUniFFI release does not provide enough provenance to generate a complete transitive binary license inventory. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the enforced release gate.
+Prebuilt binaries are not published for 0.2.0. The pinned RustLiveKitUniFFI release does not provide enough provenance to generate a complete transitive binary license inventory. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the enforced release gate.
 
 ## Install from source
 
@@ -54,6 +54,12 @@ LiveKit Swift 2.15.1 cannot construct a custom public `RpcError` for an incoming
 ### Data
 
 Use `Publish Text` or `Publish Data` with reliable or lossy delivery and optional destination identities. Listen on `On Data Received` for general data packets, and use `LiveKit Data Message As Text` when the payload contains UTF-8 text.
+
+### Incoming byte streams
+
+Call `Register Byte Stream Handler` with an exact, application-defined topic, then bind `On Byte Stream Received`. Each `LiveKit Byte Stream` contains the sender identity, stream ID, topic, optional name, MIME type, attributes, and complete byte payload. Call `Unregister Byte Stream Handler` when that topic is no longer needed.
+
+Registrations survive transient reconnects and are restored when an explicit disconnect creates the next room connection. The plugin accumulates chunks up to a hard 8 MiB limit before broadcasting the completed payload on Unreal's game thread. A larger declared length or accumulated payload is rejected through `On Error` with code `byte_stream_too_large`. Topics beginning with LiveKit's reserved `lk.rpc` prefix are rejected by the pinned SDK.
 
 ## iOS microphone permission
 

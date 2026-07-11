@@ -235,6 +235,8 @@ struct FLiveKitAppleBridge::FImplementation
     Room* RoomInstance = nil;
     LiveKitUnrealRoomDelegate* Delegate = nil;
     LiveKitUnrealSwiftFacade* SwiftFacade = nil;
+    uint64 RoomGeneration = 0;
+    TSet<FString> RegisteredByteStreamTopics;
     TSet<FString> RegisteredRpcMethods;
     TAtomic<bool> bManualDisconnectInProgress{false};
     TAtomic<bool> bShuttingDown{false};
@@ -248,6 +250,8 @@ FLiveKitAppleBridge::FLiveKitAppleBridge(
     FParticipantHandler InParticipantDisconnectedHandler,
     FSpeakingHandler InSpeakingHandler,
     FDataHandler InDataHandler,
+    FByteStreamRegistrationHandler InByteStreamRegistrationHandler,
+    FByteStreamHandler InByteStreamHandler,
     FRpcRegistrationHandler InRpcRegistrationHandler,
     FRpcInvocationHandler InRpcInvocationHandler,
     FRpcResultHandler InRpcResultHandler,
@@ -259,6 +263,8 @@ FLiveKitAppleBridge::FLiveKitAppleBridge(
     , ParticipantDisconnectedHandler(MoveTemp(InParticipantDisconnectedHandler))
     , SpeakingHandler(MoveTemp(InSpeakingHandler))
     , DataHandler(MoveTemp(InDataHandler))
+    , ByteStreamRegistrationHandler(MoveTemp(InByteStreamRegistrationHandler))
+    , ByteStreamHandler(MoveTemp(InByteStreamHandler))
     , RpcRegistrationHandler(MoveTemp(InRpcRegistrationHandler))
     , RpcInvocationHandler(MoveTemp(InRpcInvocationHandler))
     , RpcResultHandler(MoveTemp(InRpcResultHandler))
@@ -316,12 +322,19 @@ void FLiveKitAppleBridge::CreateRoom()
 
     [Implementation->SwiftFacade shutdown];
     Implementation->SwiftFacade = nil;
+    ++Implementation->RoomGeneration;
     Implementation->RoomInstance = [[Room alloc]
         initWithDelegate:Implementation->Delegate
         connectOptions:nil
         roomOptions:nil];
     Implementation->SwiftFacade = [[LiveKitUnrealSwiftFacade alloc]
         initWithRoom:Implementation->RoomInstance];
+
+    const TArray<FString> ByteStreamTopics = Implementation->RegisteredByteStreamTopics.Array();
+    for (const FString& Topic : ByteStreamTopics)
+    {
+        RegisterByteStreamHandler(Topic);
+    }
 
     const TArray<FString> Methods = Implementation->RegisteredRpcMethods.Array();
     for (const FString& Method : Methods)
@@ -472,6 +485,106 @@ void FLiveKitAppleBridge::PublishData(
     Error.Code = TEXT("sdk_unavailable");
     Error.Message = TEXT("The LiveKit Apple SDK is unavailable.");
     NotifyPublishResult(OperationId, false, Error);
+#endif
+}
+
+bool FLiveKitAppleBridge::RegisterByteStreamHandler(const FString& Topic)
+{
+#if WITH_LIVEKIT_APPLE
+    if (Topic.IsEmpty() || !Implementation->SwiftFacade)
+    {
+        return false;
+    }
+
+    Implementation->RegisteredByteStreamTopics.Add(Topic);
+    FWeakLiveKitBridge WeakBridge = AsShared();
+    const FString RegisteredTopic = Topic;
+    const uint64 RegistrationGeneration = Implementation->RoomGeneration;
+    [Implementation->SwiftFacade
+        registerByteStreamHandler:ToNSString(Topic)
+        maximumBytes:LiveKitLimits::MaxIncomingByteStreamBytes
+        streamHandler:^(NSString* senderIdentity,
+                        NSString* streamId,
+                        NSString* streamTopic,
+                        NSString* name,
+                        NSString* mimeType,
+                        NSDictionary<NSString*, NSString*>* attributes,
+                        NSData* data,
+                        NSError* error)
+        {
+            FSharedLiveKitBridge Bridge = WeakBridge.Pin();
+            if (!Bridge)
+            {
+                return;
+            }
+
+            if (error)
+            {
+                const bool bTooLarge =
+                    [error.domain isEqualToString:@"LiveKitForUnreal.ByteStream"] &&
+                    error.code == 7;
+                Bridge->NotifyError(MakeLiveKitError(
+                    bTooLarge ? TEXT("byte_stream_too_large") : TEXT("byte_stream_read_failed"),
+                    error));
+                return;
+            }
+
+            FLiveKitByteStream Stream;
+            Stream.SenderIdentity = FromNSString(senderIdentity);
+            Stream.StreamId = FromNSString(streamId);
+            Stream.Topic = FromNSString(streamTopic);
+            Stream.Name = FromNSString(name);
+            Stream.MimeType = FromNSString(mimeType);
+            for (NSString* Key in attributes)
+            {
+                Stream.Attributes.Add(FromNSString(Key), FromNSString(attributes[Key]));
+            }
+            if (data.length > 0)
+            {
+                Stream.Data.Append(
+                    static_cast<const uint8*>(data.bytes),
+                    static_cast<int32>(data.length));
+            }
+            Bridge->NotifyByteStream(Stream);
+        }
+        completion:^(NSError* error)
+        {
+            const bool bSuccess = error == nil;
+            const FLiveKitError Result = error
+                ? MakeLiveKitError(TEXT("byte_stream_registration_failed"), error)
+                : FLiveKitError();
+            AsyncTask(
+                ENamedThreads::GameThread,
+                [WeakBridge, RegisteredTopic, RegistrationGeneration, bSuccess, Result]()
+            {
+                if (FSharedLiveKitBridge Bridge = WeakBridge.Pin())
+                {
+                    if (Bridge->Implementation->RoomGeneration != RegistrationGeneration)
+                    {
+                        return;
+                    }
+                    if (!bSuccess)
+                    {
+                        Bridge->Implementation->RegisteredByteStreamTopics.Remove(RegisteredTopic);
+                    }
+                    Bridge->NotifyByteStreamRegistrationResult(
+                        RegisteredTopic,
+                        bSuccess,
+                        Result);
+                }
+            });
+        }];
+    return true;
+#else
+    return false;
+#endif
+}
+
+void FLiveKitAppleBridge::UnregisterByteStreamHandler(const FString& Topic)
+{
+#if WITH_LIVEKIT_APPLE
+    Implementation->RegisteredByteStreamTopics.Remove(Topic);
+    [Implementation->SwiftFacade unregisterByteStreamHandler:ToNSString(Topic) completion:^{}];
 #endif
 }
 
@@ -637,6 +750,25 @@ void FLiveKitAppleBridge::NotifyData(const FLiveKitDataMessage& Message)
     if (DataHandler)
     {
         DataHandler(Message);
+    }
+}
+
+void FLiveKitAppleBridge::NotifyByteStreamRegistrationResult(
+    const FString& Topic,
+    bool bSuccess,
+    const FLiveKitError& Error)
+{
+    if (ByteStreamRegistrationHandler)
+    {
+        ByteStreamRegistrationHandler(Topic, bSuccess, Error);
+    }
+}
+
+void FLiveKitAppleBridge::NotifyByteStream(const FLiveKitByteStream& Stream)
+{
+    if (ByteStreamHandler)
+    {
+        ByteStreamHandler(Stream);
     }
 }
 

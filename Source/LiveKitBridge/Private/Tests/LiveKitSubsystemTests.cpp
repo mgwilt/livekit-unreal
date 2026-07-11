@@ -5,6 +5,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Engine/GameInstance.h"
 #include "Misc/AutomationTest.h"
+#include "UObject/UnrealType.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     FLiveKitConnectionValidationTest,
@@ -72,6 +73,88 @@ bool FLiveKitUtf8DataTest::RunTest(const FString& Parameters)
         TEXT("Blueprint text helper uses the same UTF-8 conversion"),
         ULiveKitBlueprintLibrary::DataMessageAsText(Message),
         Expected);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FLiveKitByteStreamBlueprintSurfaceTest,
+    "LiveKitBridge.ByteStream.BlueprintSurface",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FLiveKitByteStreamBlueprintSurfaceTest::RunTest(const FString& Parameters)
+{
+    UScriptStruct* StreamStruct = FLiveKitByteStream::StaticStruct();
+    TestNotNull(TEXT("Byte stream is a reflected struct"), StreamStruct);
+
+    const FName FieldNames[] = {
+        GET_MEMBER_NAME_CHECKED(FLiveKitByteStream, SenderIdentity),
+        GET_MEMBER_NAME_CHECKED(FLiveKitByteStream, StreamId),
+        GET_MEMBER_NAME_CHECKED(FLiveKitByteStream, Topic),
+        GET_MEMBER_NAME_CHECKED(FLiveKitByteStream, Name),
+        GET_MEMBER_NAME_CHECKED(FLiveKitByteStream, MimeType),
+        GET_MEMBER_NAME_CHECKED(FLiveKitByteStream, Attributes),
+        GET_MEMBER_NAME_CHECKED(FLiveKitByteStream, Data),
+    };
+    for (const FName FieldName : FieldNames)
+    {
+        FProperty* Property = StreamStruct->FindPropertyByName(FieldName);
+        TestNotNull(*FString::Printf(TEXT("%s is reflected"), *FieldName.ToString()), Property);
+        if (Property)
+        {
+            TestTrue(
+                *FString::Printf(TEXT("%s is Blueprint visible"), *FieldName.ToString()),
+                Property->HasAnyPropertyFlags(CPF_BlueprintVisible));
+        }
+    }
+
+    UClass* SubsystemClass = ULiveKitSubsystem::StaticClass();
+    TestNotNull(
+        TEXT("RegisterByteStreamHandler is Blueprint callable"),
+        SubsystemClass->FindFunctionByName(
+            GET_FUNCTION_NAME_CHECKED(ULiveKitSubsystem, RegisterByteStreamHandler)));
+    TestNotNull(
+        TEXT("UnregisterByteStreamHandler is Blueprint callable"),
+        SubsystemClass->FindFunctionByName(
+            GET_FUNCTION_NAME_CHECKED(ULiveKitSubsystem, UnregisterByteStreamHandler)));
+    TestNotNull(
+        TEXT("OnByteStreamReceived is reflected"),
+        SubsystemClass->FindPropertyByName(
+            GET_MEMBER_NAME_CHECKED(ULiveKitSubsystem, OnByteStreamReceived)));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FLiveKitByteStreamValueTest,
+    "LiveKitBridge.ByteStream.ValueContainer",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FLiveKitByteStreamValueTest::RunTest(const FString& Parameters)
+{
+    TestEqual(
+        TEXT("Incoming stream hard cap"),
+        LiveKitLimits::MaxIncomingByteStreamBytes,
+        8 * 1024 * 1024);
+
+    FLiveKitByteStream Stream;
+    Stream.SenderIdentity = TEXT("sender-1");
+    Stream.StreamId = TEXT("stream-42");
+    Stream.Topic = TEXT("models.preview");
+    Stream.Name = TEXT("shape.ply");
+    Stream.MimeType = TEXT("application/octet-stream");
+    Stream.Attributes.Add(TEXT("lod"), TEXT("preview"));
+    Stream.Data = {0x00, 0x7f, 0xff};
+
+    TestEqual(TEXT("Sender identity"), Stream.SenderIdentity, FString(TEXT("sender-1")));
+    TestEqual(TEXT("Stream ID"), Stream.StreamId, FString(TEXT("stream-42")));
+    TestEqual(TEXT("Topic"), Stream.Topic, FString(TEXT("models.preview")));
+    TestEqual(TEXT("Name"), Stream.Name, FString(TEXT("shape.ply")));
+    TestEqual(
+        TEXT("MIME type"),
+        Stream.MimeType,
+        FString(TEXT("application/octet-stream")));
+    TestEqual(TEXT("Attribute"), Stream.Attributes.FindRef(TEXT("lod")), FString(TEXT("preview")));
+    TestEqual(TEXT("Byte count"), Stream.Data.Num(), 3);
+    TestEqual(TEXT("Final byte"), Stream.Data[2], static_cast<uint8>(0xff));
     return true;
 }
 #endif

@@ -110,12 +110,26 @@ public final class LiveKitUnrealSwiftFacade: NSObject, @unchecked Sendable {
         _ responseTimeout: TimeInterval
     ) -> Void
 
+    public typealias ByteStreamCompletionHandler = @Sendable (
+        _ senderIdentity: String,
+        _ streamId: String,
+        _ topic: String,
+        _ name: String,
+        _ mimeType: String,
+        _ attributes: [String: String],
+        _ data: Data?,
+        _ error: NSError?
+    ) -> Void
+
     private weak var room: Room?
     private let pending = LiveKitUnrealPendingRpcStore()
     private let methodsLock = NSLock()
     private var methods: Set<String> = []
     private var registrationsInFlight: Set<String> = []
     private var cancelledRegistrations: Set<String> = []
+    private var byteStreamTopics: Set<String> = []
+    private var byteStreamRegistrationsInFlight: Set<String> = []
+    private var cancelledByteStreamRegistrations: Set<String> = []
     private var isShutDown = false
 
     @objc(initWithRoom:)
@@ -248,6 +262,163 @@ public final class LiveKitUnrealSwiftFacade: NSObject, @unchecked Sendable {
         }
     }
 
+    public func registerByteStreamHandler(
+        _ topic: String,
+        maximumBytes: Int,
+        streamHandler: @escaping ByteStreamCompletionHandler,
+        completion: @escaping @Sendable (NSError?) -> Void
+    ) {
+        let canRegister = methodsLock.withLock {
+            guard !isShutDown,
+                  !byteStreamTopics.contains(topic),
+                  !byteStreamRegistrationsInFlight.contains(topic)
+            else {
+                return false
+            }
+            byteStreamRegistrationsInFlight.insert(topic)
+            return true
+        }
+
+        guard canRegister else {
+            completion(NSError(
+                domain: "LiveKitForUnreal.ByteStream",
+                code: 5,
+                userInfo: [NSLocalizedDescriptionKey: "The byte-stream topic is already registered or the facade is shutting down."]
+            ))
+            return
+        }
+
+        guard let room else {
+            _ = methodsLock.withLock {
+                byteStreamRegistrationsInFlight.remove(topic)
+            }
+            completion(NSError(
+                domain: "LiveKitForUnreal.ByteStream",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "The LiveKit room is unavailable."]
+            ))
+            return
+        }
+
+        Task { [weak self] in
+            do {
+                try await room.registerByteStreamHandler(for: topic) { [weak self] reader, senderIdentity in
+                    guard let self, self.shouldDeliverByteStream(for: topic) else { return }
+
+                    let info = reader.info
+                    let streamId = info.id
+                    let streamTopic = info.topic
+                    let name = info.name ?? ""
+                    let mimeType = info.mimeType
+                    let attributes = info.attributes
+
+                    do {
+                        if let totalLength = info.totalLength, totalLength > maximumBytes {
+                            throw Self.byteStreamTooLargeError(
+                                topic: topic,
+                                receivedBytes: totalLength,
+                                maximumBytes: maximumBytes
+                            )
+                        }
+
+                        var data = Data()
+                        if let totalLength = info.totalLength, totalLength > 0 {
+                            data.reserveCapacity(min(totalLength, maximumBytes))
+                        }
+                        for try await chunk in reader {
+                            guard chunk.count <= maximumBytes - data.count else {
+                                throw Self.byteStreamTooLargeError(
+                                    topic: topic,
+                                    receivedBytes: data.count + chunk.count,
+                                    maximumBytes: maximumBytes
+                                )
+                            }
+                            data.append(chunk)
+                        }
+                        guard self.shouldDeliverByteStream(for: topic) else { return }
+                        streamHandler(
+                            senderIdentity.stringValue,
+                            streamId,
+                            streamTopic,
+                            name,
+                            mimeType,
+                            attributes,
+                            data,
+                            nil
+                        )
+                    } catch {
+                        guard self.shouldDeliverByteStream(for: topic) else { return }
+                        streamHandler(
+                            senderIdentity.stringValue,
+                            streamId,
+                            streamTopic,
+                            name,
+                            mimeType,
+                            attributes,
+                            nil,
+                            error as NSError
+                        )
+                    }
+                }
+
+                let shouldKeepRegistration = self?.methodsLock.withLock {
+                    self?.byteStreamRegistrationsInFlight.remove(topic)
+                    let wasCancelled = self?.cancelledByteStreamRegistrations.remove(topic) != nil
+                    guard self?.isShutDown == false, !wasCancelled else { return false }
+                    self?.byteStreamTopics.insert(topic)
+                    return true
+                } ?? false
+
+                guard shouldKeepRegistration else {
+                    await room.unregisterByteStreamHandler(for: topic)
+                    completion(NSError(
+                        domain: "LiveKitForUnreal.ByteStream",
+                        code: 6,
+                        userInfo: [NSLocalizedDescriptionKey: "The byte-stream registration was cancelled before it completed."]
+                    ))
+                    return
+                }
+                completion(nil)
+            } catch {
+                if let self {
+                    self.methodsLock.withLock {
+                        self.byteStreamRegistrationsInFlight.remove(topic)
+                        self.cancelledByteStreamRegistrations.remove(topic)
+                    }
+                }
+                completion(error as NSError)
+            }
+        }
+    }
+
+    public func unregisterByteStreamHandler(
+        _ topic: String,
+        completion: @escaping @Sendable () -> Void
+    ) {
+        let shouldUnregister = methodsLock.withLock {
+            if byteStreamRegistrationsInFlight.contains(topic) {
+                cancelledByteStreamRegistrations.insert(topic)
+                return false
+            }
+            return byteStreamTopics.remove(topic) != nil
+        }
+
+        guard shouldUnregister else {
+            completion()
+            return
+        }
+
+        guard let room else {
+            completion()
+            return
+        }
+
+        Task {
+            await room.unregisterByteStreamHandler(for: topic)
+            completion()
+        }
+    }
+
     public func performRpc(
         destinationIdentity: String,
         method: String,
@@ -313,17 +484,22 @@ public final class LiveKitUnrealSwiftFacade: NSObject, @unchecked Sendable {
     }
 
     public func shutdown() {
-        let methodsToRemove = methodsLock.withLock { () -> [String] in
-            guard !isShutDown else { return [] }
+        let registrationsToRemove = methodsLock.withLock { () -> ([String], [String]) in
+            guard !isShutDown else { return ([], []) }
             isShutDown = true
-            let result = Array(methods)
+            let rpcMethods = Array(methods)
+            let streamTopics = Array(byteStreamTopics)
             methods.removeAll()
-            return result
+            byteStreamTopics.removeAll()
+            return (rpcMethods, streamTopics)
         }
         if let room {
             Task {
-                for method in methodsToRemove {
+                for method in registrationsToRemove.0 {
                     await room.unregisterRpcMethod(method)
+                }
+                for topic in registrationsToRemove.1 {
+                    await room.unregisterByteStreamHandler(for: topic)
                 }
             }
         }
@@ -335,5 +511,27 @@ public final class LiveKitUnrealSwiftFacade: NSObject, @unchecked Sendable {
                 userInfo: [NSLocalizedDescriptionKey: "The LiveKit room disconnected."]
             ))
         }
+    }
+
+    private func shouldDeliverByteStream(for topic: String) -> Bool {
+        methodsLock.withLock {
+            !isShutDown &&
+                !cancelledByteStreamRegistrations.contains(topic) &&
+                (byteStreamTopics.contains(topic) || byteStreamRegistrationsInFlight.contains(topic))
+        }
+    }
+
+    private static func byteStreamTooLargeError(
+        topic: String,
+        receivedBytes: Int,
+        maximumBytes: Int
+    ) -> NSError {
+        NSError(
+            domain: "LiveKitForUnreal.ByteStream",
+            code: 7,
+            userInfo: [
+                NSLocalizedDescriptionKey: "Byte stream on topic '\(topic)' exceeds the \(maximumBytes)-byte safety limit (received or declared \(receivedBytes) bytes)."
+            ]
+        )
     }
 }

@@ -78,6 +78,29 @@ void ULiveKitSubsystem::Initialize(FSubsystemCollectionBase& Collection)
                 }
             });
         },
+        [WeakThis](const FString& Topic, bool bSuccess, const FLiveKitError& Error)
+        {
+            AsyncTask(ENamedThreads::GameThread, [WeakThis, Topic, bSuccess, Error]()
+            {
+                if (!WeakThis.IsValid() || bSuccess)
+                {
+                    return;
+                }
+
+                WeakThis->RegisteredByteStreamTopics.Remove(Topic);
+                WeakThis->ReportError(Error);
+            });
+        },
+        [WeakThis](const FLiveKitByteStream& Stream)
+        {
+            AsyncTask(ENamedThreads::GameThread, [WeakThis, Stream]()
+            {
+                if (WeakThis.IsValid())
+                {
+                    WeakThis->OnByteStreamReceived.Broadcast(Stream);
+                }
+            });
+        },
         [WeakThis](const FString& Method, bool bSuccess, const FLiveKitError& Error)
         {
             AsyncTask(ENamedThreads::GameThread, [WeakThis, Method, bSuccess, Error]()
@@ -138,6 +161,7 @@ void ULiveKitSubsystem::Deinitialize()
     }
     Bridge.Reset();
     RemoteParticipants.Reset();
+    RegisteredByteStreamTopics.Reset();
     RegisteredRpcMethods.Reset();
     Super::Deinitialize();
 }
@@ -255,6 +279,33 @@ FString ULiveKitSubsystem::PublishText(
     TArray<uint8> Data;
     Data.Append(reinterpret_cast<const uint8*>(Converted.Get()), Converted.Length());
     return PublishData(Data, Topic, Reliability, DestinationIdentities);
+}
+
+bool ULiveKitSubsystem::RegisterByteStreamHandler(const FString& Topic)
+{
+    if (Topic.IsEmpty() || RegisteredByteStreamTopics.Contains(Topic) || !Bridge)
+    {
+        return false;
+    }
+
+    // The Swift registration completes asynchronously. Record intent first so
+    // a synchronous rejection can remove it through the completion callback.
+    RegisteredByteStreamTopics.Add(Topic);
+    if (!Bridge->RegisterByteStreamHandler(Topic))
+    {
+        RegisteredByteStreamTopics.Remove(Topic);
+        return false;
+    }
+
+    return true;
+}
+
+void ULiveKitSubsystem::UnregisterByteStreamHandler(const FString& Topic)
+{
+    if (Bridge && RegisteredByteStreamTopics.Remove(Topic) > 0)
+    {
+        Bridge->UnregisterByteStreamHandler(Topic);
+    }
 }
 
 bool ULiveKitSubsystem::RegisterRpcMethod(const FString& Method)

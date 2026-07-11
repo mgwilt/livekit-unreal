@@ -11,6 +11,9 @@ public:
     using FParticipantHandler = TFunction<void(const FLiveKitParticipantInfo&)>;
     using FSpeakingHandler = TFunction<void(const FLiveKitParticipantInfo&, bool)>;
     using FDataHandler = TFunction<void(const FLiveKitDataMessage&)>;
+    using FByteStreamRegistrationHandler =
+        TFunction<void(const FString&, bool, const FLiveKitError&)>;
+    using FByteStreamHandler = TFunction<void(const FLiveKitByteStream&)>;
     using FRpcRegistrationHandler =
         TFunction<void(const FString&, bool, const FLiveKitError&)>;
     using FRpcInvocationHandler = TFunction<void(const FLiveKitRpcInvocation&)>;
@@ -24,6 +27,8 @@ public:
         FParticipantHandler InParticipantDisconnectedHandler,
         FSpeakingHandler InSpeakingHandler,
         FDataHandler InDataHandler,
+        FByteStreamRegistrationHandler InByteStreamRegistrationHandler,
+        FByteStreamHandler InByteStreamHandler,
         FRpcRegistrationHandler InRpcRegistrationHandler,
         FRpcInvocationHandler InRpcInvocationHandler,
         FRpcResultHandler InRpcResultHandler,
@@ -45,6 +50,8 @@ public:
         const FString& Topic,
         ELiveKitDataReliability Reliability,
         const TArray<FString>& DestinationIdentities);
+    bool RegisterByteStreamHandler(const FString& Topic);
+    void UnregisterByteStreamHandler(const FString& Topic);
     bool RegisterRpcMethod(const FString& Method);
     void UnregisterRpcMethod(const FString& Method);
     void PerformRpc(
@@ -67,6 +74,11 @@ public:
     void NotifyParticipantDisconnected(const FLiveKitParticipantInfo& Participant);
     void NotifyParticipantSpeaking(const FLiveKitParticipantInfo& Participant, bool bIsSpeaking);
     void NotifyData(const FLiveKitDataMessage& Message);
+    void NotifyByteStreamRegistrationResult(
+        const FString& Topic,
+        bool bSuccess,
+        const FLiveKitError& Error);
+    void NotifyByteStream(const FLiveKitByteStream& Stream);
     void NotifyRpcRegistrationResult(
         const FString& Method,
         bool bSuccess,
@@ -91,6 +103,8 @@ private:
     FParticipantHandler ParticipantDisconnectedHandler;
     FSpeakingHandler SpeakingHandler;
     FDataHandler DataHandler;
+    FByteStreamRegistrationHandler ByteStreamRegistrationHandler;
+    FByteStreamHandler ByteStreamHandler;
     FRpcRegistrationHandler RpcRegistrationHandler;
     FRpcInvocationHandler RpcInvocationHandler;
     FRpcResultHandler RpcResultHandler;

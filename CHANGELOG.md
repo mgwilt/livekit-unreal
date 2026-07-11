@@ -6,6 +6,12 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-10
+
+### Added
+
+- Blueprint-ready incoming byte streams with topic registration, sender and stream metadata, attributes, bounded complete-payload delivery, and room-recreation persistence.
+
 ## [0.1.0] - 2026-07-10
 
 ### Added
@@ -18,5 +24,6 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Verified LiveKit 2.15.1 Apple dependency bootstrap and generated Swift RPC facade.
 - UE 5.8 source builds and precompiled Mac/iOS release packaging.
 
-[Unreleased]: https://github.com/mgwilt/livekit-unreal/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/mgwilt/livekit-unreal/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/mgwilt/livekit-unreal/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/mgwilt/livekit-unreal/releases/tag/v0.1.0
