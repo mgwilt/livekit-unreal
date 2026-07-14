@@ -6,11 +6,17 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-07-10
+## [0.2.0] - 2026-07-13
 
 ### Added
 
 - Blueprint-ready incoming byte streams with topic registration, sender and stream metadata, attributes, bounded complete-payload delivery, and room-recreation persistence.
+- Blueprint-configurable Apple voice processing, applied before room connection so hosts can opt out without disabling microphone publication.
+
+### Fixed
+
+- Retained publish-operation and RPC request identifiers by value across asynchronous Apple SDK callbacks, preventing callbacks from reading expired caller state.
+- Reported Apple audio-configuration failures through the normal LiveKit error and connection-state APIs before attempting room connection.
 
 ## [0.1.0] - 2026-07-10
 
