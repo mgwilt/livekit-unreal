@@ -2,17 +2,12 @@
 
 #include "Templates/SharedPointer.h"
 
-#include <memory>
-
-/** True only when the Win64 SDK DLLs loaded and livekit::initialize succeeded. */
+/** True only when the Win64 adapter and SDK DLLs loaded and initialized. */
 bool IsLiveKitWindowsSdkInitialized();
 
 #if WITH_LIVEKIT_WINDOWS
 class FLiveKitWindowsBridge;
-namespace livekit
-{
-class Room;
-}
+struct LKUB_Room;
 
 /**
  * Keep strong bridge ownership through module shutdown so no bridge destructor
@@ -22,8 +17,9 @@ void RegisterLiveKitWindowsBridge(
     const TSharedRef<FLiveKitWindowsBridge, ESPMode::ThreadSafe>& Bridge);
 
 /**
- * Keep a terminal Room alive until livekit::shutdown has drained the SDK's
- * raw-this listener callbacks. The quarantine is released before DLL unload.
+ * Keep a terminal adapter Room alive until SDK shutdown has drained the
+ * raw-this listener callbacks. The quarantine is destroyed after shutdown
+ * while the Win64 runtime DLL chain remains pinned for process lifetime.
  */
-void QuarantineLiveKitWindowsRoom(std::shared_ptr<livekit::Room> Room);
+void QuarantineLiveKitWindowsRoom(LKUB_Room* Room);
 #endif

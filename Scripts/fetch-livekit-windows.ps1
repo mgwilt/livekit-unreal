@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [switch]$Force
+    [switch]$Force,
+    [string]$VisualStudioRoot
 )
 
 Set-StrictMode -Version Latest
@@ -12,6 +13,7 @@ $WindowsRoot = Join-Path $PluginRoot "Source\ThirdParty\Windows"
 $LockPath = Join-Path $WindowsRoot "dependencies.lock"
 $SdkRoot = Join-Path $WindowsRoot "SDK"
 $VerifyScript = Join-Path $PSScriptRoot "verify-livekit-windows.ps1"
+$BuildAdapterScript = Join-Path $PSScriptRoot "build-livekit-windows-adapter.ps1"
 
 function Read-DependencyLock {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -174,6 +176,12 @@ try {
         url = $DownloadUrl
         sha256 = $ExpectedHash
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $StagedSdk ".source.json") -Encoding UTF8
+
+    $AdapterBuildArguments = @{ SdkRoot = $StagedSdk }
+    if (-not [string]::IsNullOrWhiteSpace($VisualStudioRoot)) {
+        $AdapterBuildArguments.VisualStudioRoot = $VisualStudioRoot
+    }
+    & $BuildAdapterScript @AdapterBuildArguments
 
     $HadPreviousSdk = Test-Path -LiteralPath $SdkRoot
     if ($HadPreviousSdk) {

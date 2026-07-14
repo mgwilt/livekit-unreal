@@ -32,7 +32,9 @@ Accordingly, source publication of this Unreal integration is approved, but redi
 - Artifact: `livekit-sdk-windows-x64-1.3.0.zip`
 - SHA-256: `27a8707348d7fb094023b7c8af29e26b8e4085a4dab75d26be3968f29b2269c3`
 - License: Apache License 2.0, reproduced in this repository's `LICENSE`
-- Runtime binaries: `livekit.dll` and `livekit_ffi.dll`
+- Upstream runtime binaries: `livekit.dll` and `livekit_ffi.dll`
+
+Windows source builds also generate `LiveKitUnrealWindowsAdapter.dll` from this repository's tracked adapter source. That first-party ABI boundary is not part of the upstream archive and does not add a separate third-party license; its generated DLL, import library, and PDB are verified separately from the pinned archive manifest.
 
 ### Binary attribution limitation
 

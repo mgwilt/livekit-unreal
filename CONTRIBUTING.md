@@ -5,8 +5,9 @@ Thanks for helping improve LiveKit for Unreal. This repository is a community pr
 ## Development requirements
 
 - macOS with Xcode and the iOS SDK
+- Windows x64 with Visual Studio 2022 and the Desktop development with C++ workload
 - Unreal Engine 5.8
-- A clone with no generated Unreal or Apple dependency output committed
+- A clone with no generated Unreal, Apple dependency, Windows SDK, or Windows adapter binary output committed
 
 Set the engine location when needed, then bootstrap the exact dependencies:
 
@@ -15,6 +16,16 @@ export UE_ROOT="<path-to-UE-5.8>"
 ./Scripts/fetch-livekit-apple.sh
 ./Scripts/verify-livekit-apple.sh
 ```
+
+For Windows development, use PowerShell:
+
+```powershell
+$env:UE_ROOT = "<path-to-UE-5.8>"
+.\Scripts\fetch-livekit-windows.ps1
+.\Scripts\verify-livekit-windows.ps1
+```
+
+When any C/C++ file under `Source/WindowsAdapter/include` or `Source/WindowsAdapter/src` changes, run `Scripts/build-livekit-windows-adapter.ps1` followed by `Scripts/verify-livekit-windows.ps1`. The build provenance records the exact ordinal-sorted path and SHA-256 of every source plus a canonical source-set hash, so Unreal will not enable the Win64 backend with stale generated binaries.
 
 ## Before opening a pull request
 
@@ -31,6 +42,7 @@ Do not commit:
 
 - XCFramework archives or extracted frameworks
 - generated Swift facade archives or headers
+- downloaded LiveKit Windows SDK files or generated Windows adapter DLL, import library, and PDB
 - Unreal `Binaries`, `Intermediate`, `Saved`, or derived data
 - room tokens, API keys, API secrets, sandbox identifiers, signing credentials, or local configuration
 

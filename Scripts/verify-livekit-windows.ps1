@@ -10,6 +10,95 @@ $ErrorActionPreference = "Stop"
 $PluginRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $WindowsRoot = Join-Path $PluginRoot "Source\ThirdParty\Windows"
 $LockPath = Join-Path $WindowsRoot "dependencies.lock"
+
+function Get-AdapterSourceSet {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $Root = (Resolve-Path -LiteralPath $Root).Path.TrimEnd('\', '/')
+    $RootPrefix = $Root + [IO.Path]::DirectorySeparatorChar
+    $AllowedExtensions = @(".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx")
+    $RelativePaths = [Collections.Generic.List[string]]::new()
+
+    foreach ($DirectoryName in @("include", "src")) {
+        $Directory = Join-Path $Root $DirectoryName
+        if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
+            throw "The Windows adapter source directory is missing: $Directory"
+        }
+        foreach ($File in Get-ChildItem -LiteralPath $Directory -Recurse -File) {
+            if ($AllowedExtensions -notcontains $File.Extension.ToLowerInvariant()) {
+                continue
+            }
+            if (-not $File.FullName.StartsWith($RootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "The Windows adapter source path escapes its root: $($File.FullName)"
+            }
+            $RelativePaths.Add($File.FullName.Substring($RootPrefix.Length).Replace('\', '/'))
+        }
+    }
+    if ($RelativePaths.Count -eq 0) {
+        throw "The Windows adapter source set is empty: $Root"
+    }
+    $RelativePaths.Sort([StringComparer]::Ordinal)
+
+    $Entries = @()
+    $Canonical = [Text.StringBuilder]::new()
+    foreach ($RelativePath in $RelativePaths) {
+        $FullPath = Join-Path $Root $RelativePath.Replace('/', [IO.Path]::DirectorySeparatorChar)
+        $Hash = (Get-FileHash -LiteralPath $FullPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $Entries += [pscustomobject][ordered]@{
+            path = $RelativePath
+            sha256 = $Hash
+            fullPath = $FullPath
+        }
+        [void]$Canonical.Append($RelativePath).Append("`t").Append($Hash).Append("`n")
+    }
+
+    $Hasher = [Security.Cryptography.SHA256]::Create()
+    try {
+        $Digest = $Hasher.ComputeHash([Text.Encoding]::UTF8.GetBytes($Canonical.ToString()))
+    }
+    finally {
+        $Hasher.Dispose()
+    }
+    return [pscustomobject]@{
+        entries = @($Entries)
+        sha256 = ([BitConverter]::ToString($Digest)).Replace("-", "").ToLowerInvariant()
+    }
+}
+
+$AdapterRoot = Join-Path $PluginRoot "Source\WindowsAdapter"
+$AdapterSourceSet = Get-AdapterSourceSet -Root $AdapterRoot
+$AdapterGeneratedFiles = @(
+    ".adapter-build.json",
+    "bin/LiveKitUnrealWindowsAdapter.dll",
+    "bin/LiveKitUnrealWindowsAdapter.pdb",
+    "lib/LiveKitUnrealWindowsAdapter.lib"
+)
+$ExpectedAdapterExports = @(
+    "lkub_buffer_release"
+    "lkub_byte_stream_cancel"
+    "lkub_byte_stream_destroy"
+    "lkub_byte_stream_get_info"
+    "lkub_byte_stream_read_next"
+    "lkub_byte_stream_visit_attributes"
+    "lkub_get_abi_version"
+    "lkub_initialize"
+    "lkub_result_reset"
+    "lkub_room_connect"
+    "lkub_room_create"
+    "lkub_room_destroy"
+    "lkub_room_detach_callbacks"
+    "lkub_room_disconnect"
+    "lkub_room_perform_rpc"
+    "lkub_room_prepare_audio"
+    "lkub_room_publish_data"
+    "lkub_room_register_byte_stream_handler"
+    "lkub_room_register_rpc_method"
+    "lkub_room_set_microphone_enabled"
+    "lkub_room_unregister_byte_stream_handler"
+    "lkub_room_unregister_rpc_method"
+    "lkub_room_visit_remote_participants"
+    "lkub_shutdown"
+)
 if ([string]::IsNullOrWhiteSpace($SdkRoot)) {
     $SdkRoot = Join-Path $WindowsRoot "SDK"
 }
@@ -55,6 +144,7 @@ if (-not (Test-Path -LiteralPath $SdkRoot -PathType Container)) {
 }
 $SdkRoot = (Resolve-Path -LiteralPath $SdkRoot).Path
 $VerificationMarkerPath = Join-Path $SdkRoot ".verified.json"
+$AdapterBuildMarkerPath = Join-Path $SdkRoot ".adapter-build.json"
 # A failed or interrupted verification must never leave a marker that can enable
 # the Win64 backend on a later direct Unreal build.
 Remove-Item -LiteralPath $VerificationMarkerPath -Force -ErrorAction SilentlyContinue
@@ -77,12 +167,87 @@ foreach ($RelativePath in @(
     "lib\livekit.lib",
     "lib\livekit_ffi.dll.lib",
     "bin\livekit.dll",
-    "bin\livekit_ffi.dll"
+    "bin\livekit_ffi.dll",
+    "lib\LiveKitUnrealWindowsAdapter.lib",
+    "bin\LiveKitUnrealWindowsAdapter.dll",
+    "bin\LiveKitUnrealWindowsAdapter.pdb"
 )) {
     $Path = Join-Path $SdkRoot $RelativePath
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf) -or (Get-Item -LiteralPath $Path).Length -eq 0) {
         throw "LiveKit Windows SDK is missing required file: $RelativePath"
     }
+}
+foreach ($AdapterSourceFile in $AdapterSourceSet.entries) {
+    if ((Get-Item -LiteralPath $AdapterSourceFile.fullPath).Length -eq 0) {
+        throw "LiveKit Windows adapter source is empty: $($AdapterSourceFile.path)"
+    }
+}
+$AdapterBuild = if (Test-Path -LiteralPath $AdapterBuildMarkerPath -PathType Leaf) {
+    Get-Content -LiteralPath $AdapterBuildMarkerPath -Raw | ConvertFrom-Json
+}
+else {
+    throw "LiveKit Windows adapter build provenance is missing: .adapter-build.json. Run Scripts/build-livekit-windows-adapter.ps1."
+}
+$CurrentAdapterHashes = [ordered]@{
+    adapterSourceSetSha256 = $AdapterSourceSet.sha256
+    adapterDllSha256 = (Get-FileHash -LiteralPath (Join-Path $SdkRoot "bin\LiveKitUnrealWindowsAdapter.dll") -Algorithm SHA256).Hash.ToLowerInvariant()
+    adapterLibSha256 = (Get-FileHash -LiteralPath (Join-Path $SdkRoot "lib\LiveKitUnrealWindowsAdapter.lib") -Algorithm SHA256).Hash.ToLowerInvariant()
+    adapterPdbSha256 = (Get-FileHash -LiteralPath (Join-Path $SdkRoot "bin\LiveKitUnrealWindowsAdapter.pdb") -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+if ([int]$AdapterBuild.schemaVersion -ne 2 -or
+    [string]$AdapterBuild.toolchain -ne "Visual Studio 2022 x64" -or
+    [string]$AdapterBuild.adapterArchitecture -ne "x64") {
+    throw "LiveKit Windows adapter build provenance is invalid. Rebuild the adapter."
+}
+foreach ($HashName in $CurrentAdapterHashes.Keys) {
+    $RecordedHash = ([string]$AdapterBuild.$HashName).ToLowerInvariant()
+    if ($RecordedHash -notmatch '^[a-f0-9]{64}$' -or $RecordedHash -ne $CurrentAdapterHashes[$HashName]) {
+        throw "LiveKit Windows adapter build provenance is stale: $HashName. Rebuild the adapter."
+    }
+}
+$RecordedAdapterSources = @($AdapterBuild.adapterSources)
+if ($RecordedAdapterSources.Count -ne $AdapterSourceSet.entries.Count) {
+    throw "LiveKit Windows adapter source-set provenance is stale. Rebuild the adapter."
+}
+for ($Index = 0; $Index -lt $AdapterSourceSet.entries.Count; ++$Index) {
+    $RecordedSource = $RecordedAdapterSources[$Index]
+    $CurrentSource = $AdapterSourceSet.entries[$Index]
+    $RecordedPath = [string]$RecordedSource.path
+    $RecordedHash = ([string]$RecordedSource.sha256).ToLowerInvariant()
+    if (-not [string]::Equals($RecordedPath, $CurrentSource.path, [StringComparison]::Ordinal) -or
+        $RecordedHash -notmatch '^[a-f0-9]{64}$' -or
+        $RecordedHash -ne $CurrentSource.sha256) {
+        throw "LiveKit Windows adapter source-set provenance is stale at index $Index. Rebuild the adapter."
+    }
+}
+$RecordedExports = @(
+    $AdapterBuild.adapterExports |
+        ForEach-Object { [string]$_ } |
+        Sort-Object -Unique
+)
+$ExportDifferences = @(
+    Compare-Object -ReferenceObject $ExpectedAdapterExports -DifferenceObject $RecordedExports
+)
+if ($ExportDifferences.Count -ne 0) {
+    throw "LiveKit Windows adapter export provenance is invalid. Rebuild the adapter."
+}
+$RecordedDependencies = @(
+    $AdapterBuild.adapterDependencies |
+        ForEach-Object { ([string]$_).ToLowerInvariant() } |
+        Sort-Object -Unique
+)
+foreach ($RequiredDependency in @("livekit.dll", "msvcp140.dll", "vcruntime140.dll")) {
+    if ($RecordedDependencies -notcontains $RequiredDependency) {
+        throw "LiveKit Windows adapter dependency provenance is invalid: $RequiredDependency is missing."
+    }
+}
+$ForbiddenDependencies = @(
+    $RecordedDependencies | Where-Object {
+        $_ -match '^(unrealeditor|unrealengine|avatar)(-|\.|$)'
+    }
+)
+if ($ForbiddenDependencies.Count -ne 0) {
+    throw "LiveKit Windows adapter dependency provenance crosses the Unreal allocator boundary."
 }
 $Headers = @(Get-ChildItem -LiteralPath (Join-Path $SdkRoot "include\livekit") -Filter "*.h" -File -ErrorAction SilentlyContinue)
 if ($Headers.Count -eq 0) {
@@ -121,6 +286,9 @@ foreach ($Line in Get-Content -LiteralPath $ManifestPath) {
     if ([IO.Path]::IsPathRooted($RelativePath) -or $RelativePath.Split('/') -contains "..") {
         throw "Unsafe SDK file manifest path: $RelativePath"
     }
+    if ($AdapterGeneratedFiles -contains $RelativePath) {
+        throw "The SDK archive manifest must not include generated adapter output: $RelativePath"
+    }
     if ($ExpectedFiles.ContainsKey($RelativePath)) {
         throw "Duplicate SDK file manifest path: $RelativePath"
     }
@@ -149,7 +317,8 @@ $ActualFiles = @(
         Where-Object {
             $_.FullName -ne $ManifestPath -and
             $_.FullName -ne $SourcePath -and
-            $_.FullName -ne $VerificationMarkerPath
+            $_.FullName -ne $VerificationMarkerPath -and
+            $AdapterGeneratedFiles -notcontains $_.FullName.Substring($SdkRoot.Length + 1).Replace('\', '/')
         } |
         ForEach-Object { $_.FullName.Substring($SdkRoot.Length + 1).Replace('\', '/') } |
         Sort-Object
@@ -169,6 +338,11 @@ try {
         lockSha256 = (Get-FileHash -LiteralPath $LockPath -Algorithm SHA256).Hash.ToLowerInvariant()
         sourceSha256 = (Get-FileHash -LiteralPath $SourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
         manifestSha256 = (Get-FileHash -LiteralPath $ManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        adapterBuildSha256 = (Get-FileHash -LiteralPath $AdapterBuildMarkerPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        adapterSourceSetSha256 = $CurrentAdapterHashes.adapterSourceSetSha256
+        adapterDllSha256 = $CurrentAdapterHashes.adapterDllSha256
+        adapterLibSha256 = $CurrentAdapterHashes.adapterLibSha256
+        adapterPdbSha256 = $CurrentAdapterHashes.adapterPdbSha256
         verifiedUtc = [DateTime]::UtcNow.ToString("o")
     } | ConvertTo-Json | Set-Content -LiteralPath $MarkerTemporaryPath -Encoding UTF8
     Move-Item -LiteralPath $MarkerTemporaryPath -Destination $VerificationMarkerPath -Force

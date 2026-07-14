@@ -24,7 +24,7 @@
 /Source/ThirdParty/Apple/Mac/
 /Source/ThirdParty/Apple/Facade/
 
-# Downloaded Windows C++ SDK (the lock file remains tracked)
+# Downloaded Windows C++ SDK and generated ABI adapter output (sources and the lock remain tracked)
 /Source/ThirdParty/Windows/SDK/
 /Source/ThirdParty/Windows/*.download
 /Source/ThirdParty/Windows/.extract/

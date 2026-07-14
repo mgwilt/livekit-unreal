@@ -1,16 +1,21 @@
 #include "LiveKitBridgeModule.h"
 
+#include "Containers/StringConv.h"
 #include "HAL/PlatformProcess.h"
+#include "Math/UnrealMathUtility.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
 
 #if WITH_LIVEKIT_WINDOWS
 #include "LiveKitWindowsBridge.h"
+#include "LiveKitWindowsAdapter.h"
 #include "Misc/ScopeLock.h"
+#include "Windows/AllowWindowsPlatformTypes.h"
 
 #include <atomic>
-#include <exception>
-#include <livekit/livekit.h>
+#include <delayimp.h>
+
+#include "Windows/HideWindowsPlatformTypes.h"
 #endif
 
 DEFINE_LOG_CATEGORY_STATIC(LogLiveKitBridgeModule, Log, All);
@@ -22,9 +27,10 @@ std::atomic_bool GWindowsSdkAvailable{false};
 bool GWindowsSdkInitializationOwned = false;
 void* GWindowsFfiDllHandle = nullptr;
 void* GWindowsLiveKitDllHandle = nullptr;
+void* GWindowsAdapterDllHandle = nullptr;
 FCriticalSection GWindowsBridgeRegistryMutex;
 TArray<TSharedPtr<FLiveKitWindowsBridge, ESPMode::ThreadSafe>> GWindowsBridges;
-TArray<std::shared_ptr<livekit::Room>> GWindowsRoomQuarantine;
+TArray<LKUB_Room*> GWindowsRoomQuarantine;
 bool GWindowsModuleShuttingDown = false;
 #else
 constexpr bool GWindowsSdkAvailable = false;
@@ -60,28 +66,40 @@ void RegisterLiveKitWindowsBridge(
     }
 }
 
-void QuarantineLiveKitWindowsRoom(std::shared_ptr<livekit::Room> Room)
+void QuarantineLiveKitWindowsRoom(LKUB_Room* Room)
 {
-    if (!Room)
+    if (Room == nullptr)
     {
         return;
     }
 
     FScopeLock Lock(&GWindowsBridgeRegistryMutex);
-    for (const std::shared_ptr<livekit::Room>& Existing : GWindowsRoomQuarantine)
+    for (LKUB_Room* Existing : GWindowsRoomQuarantine)
     {
-        if (Existing.get() == Room.get())
+        if (Existing == Room)
         {
             return;
         }
     }
-    GWindowsRoomQuarantine.Add(MoveTemp(Room));
+    GWindowsRoomQuarantine.Add(Room);
 }
 #endif
 
 class FLiveKitBridgeModule final : public IModuleInterface
 {
 public:
+    virtual bool SupportsDynamicReloading() override
+    {
+#if WITH_LIVEKIT_WINDOWS
+        // The pinned LiveKit FFI can still execute worker cleanup after its
+        // synchronous shutdown call returns. A live Win64 backend therefore
+        // cannot safely unload or hot-reload this module in-process.
+        return false;
+#else
+        return true;
+#endif
+    }
+
     virtual void StartupModule() override
     {
 #if WITH_LIVEKIT_WINDOWS
@@ -124,39 +142,65 @@ public:
             UE_LOG(
                 LogLiveKitBridgeModule,
                 Error,
-                TEXT("Unable to load livekit_ffi.dll and livekit.dll beside the LiveKitBridge module or packaged executable."));
+                TEXT("Unable to load livekit_ffi.dll, livekit.dll, and LiveKitUnrealWindowsAdapter.dll beside the LiveKitBridge module or packaged executable."));
             return;
         }
 
-        try
-        {
-            GWindowsSdkInitializationOwned = livekit::initialize(livekit::LogLevel::Info);
-            if (!GWindowsSdkInitializationOwned)
-            {
-                UE_LOG(
-                    LogLiveKitBridgeModule,
-                    Error,
-                    TEXT("LiveKit C++ SDK was already initialized by another owner; the Win64 backend requires exclusive lifecycle ownership."));
-                ReleaseWindowsLibraries();
-                return;
-            }
-            GWindowsSdkAvailable.store(true, std::memory_order_release);
-            UE_LOG(
-                LogLiveKitBridgeModule,
-                Log,
-                TEXT("LiveKit C++ SDK available for Win64 from %s (%s)."),
-                *LoadedDirectory,
-                TEXT("initialized by LiveKitBridge"));
-        }
-        catch (const std::exception& Error)
+        const uint32 AdapterAbiVersion = lkub_get_abi_version();
+        if (AdapterAbiVersion != LKUB_ABI_VERSION)
         {
             UE_LOG(
                 LogLiveKitBridgeModule,
                 Error,
-                TEXT("LiveKit C++ SDK initialization failed: %s"),
-                UTF8_TO_TCHAR(Error.what()));
-            ReleaseWindowsLibraries();
+                TEXT("LiveKit Windows adapter ABI mismatch: expected %u but loaded %u."),
+                static_cast<uint32>(LKUB_ABI_VERSION),
+                AdapterAbiVersion);
+            ReleaseWindowsLibrariesBeforeInitialization();
+            return;
         }
+
+        LKUB_Result InitializeResult{};
+        lkub_result_reset(&InitializeResult);
+        uint8 bInitializationOwned = 0;
+        const int32 InitializeStatus = lkub_initialize(
+            LKUB_LOG_INFO,
+            &bInitializationOwned,
+            &InitializeResult);
+        GWindowsSdkInitializationOwned =
+            InitializeStatus == LKUB_STATUS_OK && bInitializationOwned != 0;
+        if (!GWindowsSdkInitializationOwned)
+        {
+            const int32 MessageByteCount = static_cast<int32>(FMath::Min<uint32>(
+                InitializeResult.message_size,
+                LKUB_RESULT_MESSAGE_CAPACITY));
+            const FUTF8ToTCHAR ConvertedMessage(
+                InitializeResult.message,
+                MessageByteCount);
+            const FString Message(ConvertedMessage.Length(), ConvertedMessage.Get());
+            UE_LOG(
+                LogLiveKitBridgeModule,
+                Error,
+                TEXT("LiveKit Windows adapter initialization failed (status %d): %s"),
+                InitializeStatus,
+                *Message);
+            if (bInitializationOwned != 0)
+            {
+                lkub_shutdown();
+            }
+            // Once lkub_initialize has been entered, a failure or an
+            // already-initialized result cannot prove that no FFI worker is
+            // alive. Keep the runtime chain pinned just as on the success
+            // path; only pre-initialize failures may release these handles.
+            return;
+        }
+
+        GWindowsSdkAvailable.store(true, std::memory_order_release);
+        UE_LOG(
+            LogLiveKitBridgeModule,
+            Log,
+            TEXT("LiveKit Windows adapter ABI %u available from %s (SDK lifecycle owned by LiveKitBridge)."),
+            AdapterAbiVersion,
+            *LoadedDirectory);
 #endif
     }
 
@@ -190,30 +234,45 @@ public:
 
         if (GWindowsSdkInitializationOwned)
         {
-            livekit::shutdown();
+            lkub_shutdown();
         }
         GWindowsSdkInitializationOwned = false;
 
         // SDK shutdown is the only public barrier that guarantees every
         // ListenerSlot callback has returned. Release terminal Rooms after it,
         // while the C++ DLL is still loaded.
-        TArray<std::shared_ptr<livekit::Room>> QuarantinedRooms;
+        TArray<LKUB_Room*> QuarantinedRooms;
         {
             FScopeLock Lock(&GWindowsBridgeRegistryMutex);
             QuarantinedRooms = MoveTemp(GWindowsRoomQuarantine);
             GWindowsRoomQuarantine.Reset();
         }
+        for (LKUB_Room* Room : QuarantinedRooms)
+        {
+            lkub_room_destroy(Room);
+        }
         QuarantinedRooms.Reset();
         ActiveBridges.Reset();
-        ReleaseWindowsLibraries();
+
+        // Do not release the adapter, LiveKit C++, or FFI DLL handles after a
+        // successful initialization. The pinned SDK's synchronous shutdown is
+        // not a proven thread-join barrier: Windows has observed late FFI
+        // worker cleanup execute after ShutdownModule returned. Keeping all
+        // three libraries mapped until process termination prevents those
+        // workers from returning into unloaded code. Windows reclaims these
+        // process-lifetime references after all process threads have stopped.
 #endif
     }
 
 private:
+#if WITH_LIVEKIT_WINDOWS
     static bool TryLoadWindowsLibraries(const FString& BinaryDirectory)
     {
         const FString FfiPath = FPaths::Combine(BinaryDirectory, TEXT("livekit_ffi.dll"));
         const FString LiveKitPath = FPaths::Combine(BinaryDirectory, TEXT("livekit.dll"));
+        const FString AdapterPath = FPaths::Combine(
+            BinaryDirectory,
+            TEXT("LiveKitUnrealWindowsAdapter.dll"));
 
         GWindowsFfiDllHandle = FPlatformProcess::GetDllHandle(*FfiPath);
         if (GWindowsFfiDllHandle == nullptr)
@@ -228,11 +287,38 @@ private:
             GWindowsFfiDllHandle = nullptr;
             return false;
         }
+
+        GWindowsAdapterDllHandle = FPlatformProcess::GetDllHandle(*AdapterPath);
+        if (GWindowsAdapterDllHandle == nullptr)
+        {
+            FPlatformProcess::FreeDllHandle(GWindowsLiveKitDllHandle);
+            GWindowsLiveKitDllHandle = nullptr;
+            FPlatformProcess::FreeDllHandle(GWindowsFfiDllHandle);
+            GWindowsFfiDllHandle = nullptr;
+            return false;
+        }
         return true;
     }
 
-    static void ReleaseWindowsLibraries()
+    static void ReleaseWindowsLibrariesBeforeInitialization()
     {
+        // This path is valid only before this module has acquired successful
+        // SDK lifecycle ownership. No SDK/FFI worker can still be running.
+        if (GWindowsAdapterDllHandle != nullptr)
+        {
+            // Unreal's Win64 linker emits /DELAY:UNLOAD. Reset this module's
+            // delay-import table before releasing our explicit reference so a
+            // hot reload cannot retain stale adapter entry points.
+            if (!__FUnloadDelayLoadedDLL2("LiveKitUnrealWindowsAdapter.dll"))
+            {
+                UE_LOG(
+                    LogLiveKitBridgeModule,
+                    Warning,
+                    TEXT("Unable to reset the LiveKit Windows adapter delay-import table during unload."));
+            }
+            FPlatformProcess::FreeDllHandle(GWindowsAdapterDllHandle);
+            GWindowsAdapterDllHandle = nullptr;
+        }
         if (GWindowsLiveKitDllHandle != nullptr)
         {
             FPlatformProcess::FreeDllHandle(GWindowsLiveKitDllHandle);
@@ -244,6 +330,7 @@ private:
             GWindowsFfiDllHandle = nullptr;
         }
     }
+#endif
 };
 
 IMPLEMENT_MODULE(FLiveKitBridgeModule, LiveKitBridge)

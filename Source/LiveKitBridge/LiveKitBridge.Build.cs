@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 using UnrealBuildTool;
 
@@ -53,12 +55,21 @@ public class LiveKitBridge : ModuleRules
         string windowsFfiLib = Path.Combine(windowsLib, "livekit_ffi.dll.lib");
         string windowsLiveKitDll = Path.Combine(windowsBin, "livekit.dll");
         string windowsFfiDll = Path.Combine(windowsBin, "livekit_ffi.dll");
+        string windowsAdapterRoot = Path.Combine(PluginDirectory, "Source", "WindowsAdapter");
+        string windowsAdapterInclude = Path.Combine(windowsAdapterRoot, "include");
+        string windowsAdapterLib = Path.Combine(windowsLib, "LiveKitUnrealWindowsAdapter.lib");
+        string windowsAdapterDll = Path.Combine(windowsBin, "LiveKitUnrealWindowsAdapter.dll");
+        string windowsAdapterPdb = Path.Combine(windowsBin, "LiveKitUnrealWindowsAdapter.pdb");
         bool hasWindowsSdk = isWindows &&
             isInternalBuild &&
             HasVerifiedWindowsSdk(
                 windowsRoot,
                 windowsSdkRoot,
                 windowsInclude,
+                windowsAdapterRoot,
+                windowsAdapterDll,
+                windowsAdapterLib,
+                windowsAdapterPdb,
                 windowsLiveKitLib,
                 windowsFfiLib,
                 windowsLiveKitDll,
@@ -115,30 +126,13 @@ public class LiveKitBridge : ModuleRules
         if (hasWindowsSdk)
         {
             bEnableExceptions = true;
-            PrivateIncludePaths.Add(windowsInclude);
-            PublicAdditionalLibraries.AddRange(new[]
-            {
-                windowsLiveKitLib,
-                windowsFfiLib
-            });
-            PublicSystemLibraries.AddRange(new[]
-            {
-                "ntdll.lib",
-                "userenv.lib",
-                "winmm.lib",
-                "iphlpapi.lib",
-                "msdmo.lib",
-                "dmoguids.lib",
-                "wmcodecdspuuid.lib",
-                "ws2_32.lib",
-                "secur32.lib",
-                "bcrypt.lib",
-                "crypt32.lib"
-            });
+            PrivateIncludePaths.Add(windowsAdapterInclude);
+            PublicAdditionalLibraries.Add(windowsAdapterLib);
             PublicDelayLoadDLLs.AddRange(new[]
             {
                 "livekit_ffi.dll",
-                "livekit.dll"
+                "livekit.dll",
+                "LiveKitUnrealWindowsAdapter.dll"
             });
             RuntimeDependencies.Add(
                 "$(BinaryOutputDir)/livekit_ffi.dll",
@@ -147,6 +141,10 @@ public class LiveKitBridge : ModuleRules
             RuntimeDependencies.Add(
                 "$(BinaryOutputDir)/livekit.dll",
                 windowsLiveKitDll,
+                StagedFileType.NonUFS);
+            RuntimeDependencies.Add(
+                "$(BinaryOutputDir)/LiveKitUnrealWindowsAdapter.dll",
+                windowsAdapterDll,
                 StagedFileType.NonUFS);
             RuntimeDependencies.Add(
                 "$(BinaryOutputDir)/LiveKitBridge-THIRD_PARTY_NOTICES.md",
@@ -176,6 +174,10 @@ public class LiveKitBridge : ModuleRules
         string windowsRoot,
         string sdkRoot,
         string includeRoot,
+        string adapterRoot,
+        string adapterDll,
+        string adapterLib,
+        string adapterPdb,
         params string[] requiredFiles)
     {
         const string pinnedVersion = "1.3.0";
@@ -185,13 +187,20 @@ public class LiveKitBridge : ModuleRules
         string lockPath = Path.Combine(windowsRoot, "dependencies.lock");
         string sourcePath = Path.Combine(sdkRoot, ".source.json");
         string manifestPath = Path.Combine(sdkRoot, ".files.sha256");
+        string adapterBuildPath = Path.Combine(sdkRoot, ".adapter-build.json");
         string markerPath = Path.Combine(sdkRoot, ".verified.json");
         string liveKitHeader = Path.Combine(includeRoot, "livekit", "livekit.h");
         if (!File.Exists(lockPath) ||
             !File.Exists(sourcePath) ||
             !File.Exists(manifestPath) ||
+            !File.Exists(adapterBuildPath) ||
             !File.Exists(markerPath) ||
-            !File.Exists(liveKitHeader))
+            !File.Exists(liveKitHeader) ||
+            !Directory.Exists(Path.Combine(adapterRoot, "include")) ||
+            !Directory.Exists(Path.Combine(adapterRoot, "src")) ||
+            !File.Exists(adapterDll) ||
+            !File.Exists(adapterLib) ||
+            !File.Exists(adapterPdb))
         {
             return false;
         }
@@ -201,6 +210,12 @@ public class LiveKitBridge : ModuleRules
             {
                 return false;
             }
+        }
+
+        string adapterSourceSetSha256 = HashAdapterSourceSet(adapterRoot);
+        if (string.IsNullOrEmpty(adapterSourceSetSha256))
+        {
+            return false;
         }
 
         string lockText = File.ReadAllText(lockPath);
@@ -218,7 +233,87 @@ public class LiveKitBridge : ModuleRules
             ReadJsonString(markerText, "lockSha256") == HashFile(lockPath) &&
             ReadJsonString(markerText, "sourceSha256") == HashFile(sourcePath) &&
             ReadJsonString(markerText, "manifestSha256") == HashFile(manifestPath) &&
+            ReadJsonString(markerText, "adapterBuildSha256") == HashFile(adapterBuildPath) &&
+            ReadJsonString(markerText, "adapterSourceSetSha256") == adapterSourceSetSha256 &&
+            ReadJsonString(markerText, "adapterDllSha256") == HashFile(adapterDll) &&
+            ReadJsonString(markerText, "adapterLibSha256") == HashFile(adapterLib) &&
+            ReadJsonString(markerText, "adapterPdbSha256") == HashFile(adapterPdb) &&
             VerifyManifestFiles(sdkRoot, manifestPath);
+    }
+
+    private static string HashAdapterSourceSet(string adapterRoot)
+    {
+        try
+        {
+            string normalizedRoot = Path.GetFullPath(adapterRoot).TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar);
+            string rootPrefix = normalizedRoot + Path.DirectorySeparatorChar;
+            List<string> relativePaths = new List<string>();
+
+            foreach (string directoryName in new[] { "include", "src" })
+            {
+                string directory = Path.Combine(normalizedRoot, directoryName);
+                if (!Directory.Exists(directory))
+                {
+                    return string.Empty;
+                }
+
+                foreach (string sourcePath in Directory.GetFiles(
+                    directory,
+                    "*",
+                    SearchOption.AllDirectories))
+                {
+                    string extension = Path.GetExtension(sourcePath);
+                    if (!IsAdapterSourceExtension(extension))
+                    {
+                        continue;
+                    }
+
+                    string fullPath = Path.GetFullPath(sourcePath);
+                    if (!fullPath.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return string.Empty;
+                    }
+                    relativePaths.Add(fullPath.Substring(rootPrefix.Length).Replace('\\', '/'));
+                }
+            }
+
+            if (relativePaths.Count == 0)
+            {
+                return string.Empty;
+            }
+            relativePaths.Sort(StringComparer.Ordinal);
+
+            StringBuilder canonical = new StringBuilder();
+            foreach (string relativePath in relativePaths)
+            {
+                string fullPath = Path.Combine(
+                    normalizedRoot,
+                    relativePath.Replace('/', Path.DirectorySeparatorChar));
+                canonical.Append(relativePath)
+                    .Append('\t')
+                    .Append(HashFile(fullPath))
+                    .Append('\n');
+            }
+            return HashBytes(Encoding.UTF8.GetBytes(canonical.ToString()));
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static bool IsAdapterSourceExtension(string extension)
+    {
+        return extension.Equals(".c", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".cc", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".cpp", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".cxx", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".h", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".hh", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".hpp", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".hxx", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool VerifyManifestFiles(string sdkRoot, string manifestPath)
@@ -297,6 +392,16 @@ public class LiveKitBridge : ModuleRules
         using (FileStream stream = File.OpenRead(path))
         {
             return System.BitConverter.ToString(sha256.ComputeHash(stream))
+                .Replace("-", string.Empty)
+                .ToLowerInvariant();
+        }
+    }
+
+    private static string HashBytes(byte[] bytes)
+    {
+        using (SHA256 sha256 = SHA256.Create())
+        {
+            return System.BitConverter.ToString(sha256.ComputeHash(bytes))
                 .Replace("-", string.Empty)
                 .ToLowerInvariant();
         }

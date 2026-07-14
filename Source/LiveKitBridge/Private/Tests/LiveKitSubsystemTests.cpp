@@ -40,8 +40,23 @@ bool FLiveKitWindowsDependencyDiscoveryTest::RunTest(const FString& Parameters)
         IFileManager::Get().FileExists(
             *FPaths::Combine(ModuleDirectory, TEXT("livekit.dll"))));
     TestTrue(
+        TEXT("LiveKitUnrealWindowsAdapter.dll is staged beside the editor module"),
+        IFileManager::Get().FileExists(
+            *FPaths::Combine(
+                ModuleDirectory,
+                TEXT("LiveKitUnrealWindowsAdapter.dll"))));
+    TestTrue(
         TEXT("Verified LiveKit C++ SDK initialized"),
         IsLiveKitWindowsSdkInitialized());
+    IModuleInterface* LiveKitModule =
+        FModuleManager::Get().GetModule(FName(TEXT("LiveKitBridge")));
+    TestNotNull(TEXT("LiveKitBridge module interface is available"), LiveKitModule);
+    if (LiveKitModule != nullptr)
+    {
+        TestFalse(
+            TEXT("The initialized Win64 backend rejects dynamic module reload"),
+            LiveKitModule->SupportsDynamicReloading());
+    }
 #else
     TestTrue(TEXT("No verified Win64 SDK is expected for this target"), true);
 #endif

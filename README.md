@@ -42,7 +42,7 @@ Windows PowerShell:
 .\Plugins\LiveKitBridge\Scripts\verify-livekit-windows.ps1
 ```
 
-The dependency archives, extracted frameworks, generated headers, libraries, DLLs, and facade static libraries are intentionally excluded from Git. The Windows fetch script verifies the pinned archive checksum before atomically replacing `Source/ThirdParty/Windows/SDK`; the separate verifier checks every installed file and writes the lock-bound marker required to enable the Win64 backend at build time.
+The dependency archives, extracted frameworks, generated headers, libraries, DLLs, and facade static libraries are intentionally excluded from Git. The Windows fetch script verifies the pinned archive checksum, builds the narrow Unreal adapter with the Visual Studio 2022 x64 toolchain, checks its exact C exports, x64 architecture, dynamic CRT, LiveKit dependency, and absence of Unreal binary dependencies, and then atomically replaces `Source/ThirdParty/Windows/SDK`. The separate verifier checks every upstream SDK file and generated adapter artifact before writing the lock- and source-bound marker required to enable the Win64 backend at build time. The marker binds an ordinal-sorted set of every C/C++ file under `Source/WindowsAdapter/include` and `Source/WindowsAdapter/src`, so adding, removing, renaming, or editing any adapter source invalidates stale binaries and automatically selects the SDK-unavailable fallback until the adapter is rebuilt and verified.
 
 ## Blueprint quick start
 
@@ -97,13 +97,24 @@ export UE_ROOT="<path-to-UE-5.8>"
 ./Scripts/verify-release-compliance.sh source
 ```
 
-On Windows, run the dependency verification from PowerShell before building:
+On Windows, Visual Studio 2022 with the Desktop development with C++ workload is required. Run the dependency verification from PowerShell before building:
 
 ```powershell
 $env:UE_ROOT = "<path-to-UE-5.8>"
 .\Scripts\fetch-livekit-windows.ps1
 .\Scripts\verify-livekit-windows.ps1
 ```
+
+After changing `Source/WindowsAdapter`, rebuild and re-verify the generated adapter without downloading the SDK again:
+
+```powershell
+.\Scripts\build-livekit-windows-adapter.ps1
+.\Scripts\verify-livekit-windows.ps1
+```
+
+Pass `-VisualStudioRoot "<path-to-Visual-Studio-2022>"` to either build entry point when automatic Visual Studio discovery is unavailable. The build helper removes the verification marker before touching generated output; Unreal therefore keeps `WITH_LIVEKIT_WINDOWS=0` until verification succeeds.
+
+After the Win64 SDK initializes, the plugin keeps the adapter, LiveKit C++, and LiveKit FFI DLLs mapped for the remainder of the process and disables dynamic module reload. The pinned SDK can finish asynchronous FFI cleanup after its synchronous shutdown call returns, so restart the editor or game process after rebuilding the Windows adapter or bridge.
 
 `test-plugin.sh` packages the plugin and loads it in the repository's Blueprint-only smoke project before running the `LiveKitBridge.*` Unreal automation tests.
 
