@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
@@ -216,7 +217,69 @@ public class LiveKitBridge : ModuleRules
             ReadJsonString(markerText, "archiveSha256") == pinnedArchiveSha256 &&
             ReadJsonString(markerText, "lockSha256") == HashFile(lockPath) &&
             ReadJsonString(markerText, "sourceSha256") == HashFile(sourcePath) &&
-            ReadJsonString(markerText, "manifestSha256") == HashFile(manifestPath);
+            ReadJsonString(markerText, "manifestSha256") == HashFile(manifestPath) &&
+            VerifyManifestFiles(sdkRoot, manifestPath);
+    }
+
+    private static bool VerifyManifestFiles(string sdkRoot, string manifestPath)
+    {
+        try
+        {
+            string rootPrefix = sdkRoot.TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            int verifiedFileCount = 0;
+
+            foreach (string line in File.ReadAllLines(manifestPath))
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                int separatorIndex = line.IndexOf('\t');
+                if (separatorIndex != 64)
+                {
+                    return false;
+                }
+
+                string expectedHash = line.Substring(0, separatorIndex).ToLowerInvariant();
+                string relativePath = line.Substring(separatorIndex + 1);
+                if (!Regex.IsMatch(expectedHash, "^[a-f0-9]{64}$") ||
+                    string.IsNullOrWhiteSpace(relativePath) ||
+                    Path.IsPathRooted(relativePath))
+                {
+                    return false;
+                }
+
+                string normalizedRelativePath = relativePath.Replace(
+                    Path.AltDirectorySeparatorChar,
+                    Path.DirectorySeparatorChar);
+                foreach (string segment in normalizedRelativePath.Split(Path.DirectorySeparatorChar))
+                {
+                    if (segment == "..")
+                    {
+                        return false;
+                    }
+                }
+
+                string filePath = Path.GetFullPath(Path.Combine(sdkRoot, normalizedRelativePath));
+                if (!filePath.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase) ||
+                    !File.Exists(filePath) ||
+                    HashFile(filePath) != expectedHash)
+                {
+                    return false;
+                }
+
+                verifiedFileCount++;
+            }
+
+            return verifiedFileCount > 0;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static string ReadJsonString(string json, string key)

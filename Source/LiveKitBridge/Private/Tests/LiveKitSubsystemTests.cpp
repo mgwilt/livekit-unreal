@@ -7,10 +7,13 @@
 #include "HAL/FileManager.h"
 #include "HAL/PlatformProcess.h"
 #include "LiveKitBridgeModule.h"
+#include "LiveKitPlatformBridgeFactory.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
 #include "UObject/UnrealType.h"
+
+#include <atomic>
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     FLiveKitWindowsDependencyDiscoveryTest,
@@ -41,6 +44,102 @@ bool FLiveKitWindowsDependencyDiscoveryTest::RunTest(const FString& Parameters)
         IsLiveKitWindowsSdkInitialized());
 #else
     TestTrue(TEXT("No verified Win64 SDK is expected for this target"), true);
+#endif
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FLiveKitWindowsIdleLifecycleTest,
+    "LiveKitBridge.Windows.IdleLifecycle",
+    EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLiveKitWindowsIdleLifecycleTest::RunTest(const FString& Parameters)
+{
+#if PLATFORM_WINDOWS
+    std::atomic_bool bSawDisconnecting{false};
+    std::atomic_bool bSawDisconnected{false};
+    TSharedPtr<ILiveKitPlatformBridge> Bridge = CreateLiveKitPlatformBridge(
+        [&bSawDisconnecting, &bSawDisconnected](ELiveKitConnectionState State)
+        {
+            if (State == ELiveKitConnectionState::Disconnecting)
+            {
+                bSawDisconnecting.store(true, std::memory_order_release);
+            }
+            else if (State == ELiveKitConnectionState::Disconnected)
+            {
+                bSawDisconnected.store(true, std::memory_order_release);
+            }
+        },
+        [](const FLiveKitError&) {},
+        [](const FLiveKitParticipantInfo&) {},
+        [](const FLiveKitParticipantInfo&) {},
+        [](const FLiveKitParticipantInfo&, bool) {},
+        [](const FLiveKitDataMessage&) {},
+        [](const FString&, bool, const FLiveKitError&) {},
+        [](const FLiveKitByteStream&) {},
+        [](const FString&, bool, const FLiveKitError&) {},
+        [](const FLiveKitRpcInvocation&) {},
+        [](const FString&, bool, const FString&, const FLiveKitError&) {},
+        [](const FString&, bool, const FLiveKitError&) {});
+
+    TestTrue(TEXT("Windows bridge factory returns a bridge"), Bridge.IsValid());
+    if (!Bridge)
+    {
+        return false;
+    }
+
+    TestEqual(TEXT("Windows backend is selected"), Bridge->GetBackendName(), FString(TEXT("Windows")));
+    TestEqual(
+        TEXT("Bridge and module agree on SDK availability"),
+        Bridge->IsSdkAvailable(),
+        IsLiveKitWindowsSdkInitialized());
+    TestFalse(
+        TEXT("Empty byte-stream topics are rejected"),
+        Bridge->RegisterByteStreamHandler(FString()));
+    TestFalse(
+        TEXT("Empty RPC methods are rejected"),
+        Bridge->RegisterRpcMethod(FString()));
+
+    if (Bridge->IsSdkAvailable())
+    {
+        TestTrue(
+            TEXT("An idle byte-stream registration is retained for the next room"),
+            Bridge->RegisterByteStreamHandler(TEXT("tests.lifecycle.stream")));
+        TestFalse(
+            TEXT("Duplicate idle byte-stream registrations are rejected"),
+            Bridge->RegisterByteStreamHandler(TEXT("tests.lifecycle.stream")));
+        Bridge->UnregisterByteStreamHandler(TEXT("tests.lifecycle.stream"));
+
+        TestTrue(
+            TEXT("An idle RPC registration is retained for the next room"),
+            Bridge->RegisterRpcMethod(TEXT("tests.lifecycle.rpc")));
+        TestFalse(
+            TEXT("Duplicate idle RPC registrations are rejected"),
+            Bridge->RegisterRpcMethod(TEXT("tests.lifecycle.rpc")));
+        Bridge->UnregisterRpcMethod(TEXT("tests.lifecycle.rpc"));
+    }
+
+    // Unregistration and disconnect enqueue serialized control work even when
+    // no room exists. Shutdown must cancel or join that work before returning,
+    // and repeated shutdown/destruction must remain harmless.
+    Bridge->Disconnect();
+    if (Bridge->IsSdkAvailable())
+    {
+        TestTrue(
+            TEXT("Idle disconnect enters the disconnecting state"),
+            bSawDisconnecting.load(std::memory_order_acquire));
+    }
+    else
+    {
+        TestTrue(
+            TEXT("The SDK-unavailable fallback completes idle disconnect synchronously"),
+            bSawDisconnected.load(std::memory_order_acquire));
+    }
+    Bridge->Shutdown();
+    Bridge->Shutdown();
+    Bridge.Reset();
+#else
+    TestTrue(TEXT("Windows lifecycle test is not applicable to this target"), true);
 #endif
     return true;
 }

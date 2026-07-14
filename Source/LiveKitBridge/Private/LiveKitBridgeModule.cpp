@@ -5,6 +5,10 @@
 #include "Modules/ModuleManager.h"
 
 #if WITH_LIVEKIT_WINDOWS
+#include "LiveKitWindowsBridge.h"
+#include "Misc/ScopeLock.h"
+
+#include <atomic>
 #include <exception>
 #include <livekit/livekit.h>
 #endif
@@ -13,16 +17,67 @@ DEFINE_LOG_CATEGORY_STATIC(LogLiveKitBridgeModule, Log, All);
 
 namespace
 {
-bool GWindowsSdkAvailable = false;
+#if WITH_LIVEKIT_WINDOWS
+std::atomic_bool GWindowsSdkAvailable{false};
 bool GWindowsSdkInitializationOwned = false;
 void* GWindowsFfiDllHandle = nullptr;
 void* GWindowsLiveKitDllHandle = nullptr;
+FCriticalSection GWindowsBridgeRegistryMutex;
+TArray<TSharedPtr<FLiveKitWindowsBridge, ESPMode::ThreadSafe>> GWindowsBridges;
+TArray<std::shared_ptr<livekit::Room>> GWindowsRoomQuarantine;
+bool GWindowsModuleShuttingDown = false;
+#else
+constexpr bool GWindowsSdkAvailable = false;
+#endif
 }
 
 bool IsLiveKitWindowsSdkInitialized()
 {
+#if WITH_LIVEKIT_WINDOWS
+    return GWindowsSdkAvailable.load(std::memory_order_acquire);
+#else
     return GWindowsSdkAvailable;
+#endif
 }
+
+#if WITH_LIVEKIT_WINDOWS
+void RegisterLiveKitWindowsBridge(
+    const TSharedRef<FLiveKitWindowsBridge, ESPMode::ThreadSafe>& Bridge)
+{
+    bool bShutdownImmediately = false;
+    {
+        FScopeLock Lock(&GWindowsBridgeRegistryMutex);
+        bShutdownImmediately = GWindowsModuleShuttingDown;
+        if (!bShutdownImmediately)
+        {
+            GWindowsBridges.AddUnique(Bridge);
+        }
+    }
+
+    if (bShutdownImmediately)
+    {
+        Bridge->Shutdown();
+    }
+}
+
+void QuarantineLiveKitWindowsRoom(std::shared_ptr<livekit::Room> Room)
+{
+    if (!Room)
+    {
+        return;
+    }
+
+    FScopeLock Lock(&GWindowsBridgeRegistryMutex);
+    for (const std::shared_ptr<livekit::Room>& Existing : GWindowsRoomQuarantine)
+    {
+        if (Existing.get() == Room.get())
+        {
+            return;
+        }
+    }
+    GWindowsRoomQuarantine.Add(MoveTemp(Room));
+}
+#endif
 
 class FLiveKitBridgeModule final : public IModuleInterface
 {
@@ -30,6 +85,20 @@ public:
     virtual void StartupModule() override
     {
 #if WITH_LIVEKIT_WINDOWS
+        {
+            FScopeLock Lock(&GWindowsBridgeRegistryMutex);
+            if (!ensureAlwaysMsgf(
+                    GWindowsBridges.IsEmpty() && GWindowsRoomQuarantine.IsEmpty(),
+                    TEXT("LiveKitBridge started with stale Windows bridge lifetime state.")))
+            {
+                GWindowsModuleShuttingDown = true;
+                return;
+            }
+            GWindowsModuleShuttingDown = false;
+        }
+        GWindowsSdkAvailable.store(false, std::memory_order_release);
+        GWindowsSdkInitializationOwned = false;
+
         TArray<FString> BinaryDirectories;
 #if !IS_MONOLITHIC
         const FString ModuleFilename =
@@ -62,15 +131,22 @@ public:
         try
         {
             GWindowsSdkInitializationOwned = livekit::initialize(livekit::LogLevel::Info);
-            GWindowsSdkAvailable = true;
+            if (!GWindowsSdkInitializationOwned)
+            {
+                UE_LOG(
+                    LogLiveKitBridgeModule,
+                    Error,
+                    TEXT("LiveKit C++ SDK was already initialized by another owner; the Win64 backend requires exclusive lifecycle ownership."));
+                ReleaseWindowsLibraries();
+                return;
+            }
+            GWindowsSdkAvailable.store(true, std::memory_order_release);
             UE_LOG(
                 LogLiveKitBridgeModule,
                 Log,
                 TEXT("LiveKit C++ SDK available for Win64 from %s (%s)."),
                 *LoadedDirectory,
-                GWindowsSdkInitializationOwned
-                    ? TEXT("initialized by LiveKitBridge")
-                    : TEXT("already initialized by this process"));
+                TEXT("initialized by LiveKitBridge"));
         }
         catch (const std::exception& Error)
         {
@@ -87,12 +163,48 @@ public:
     virtual void ShutdownModule() override
     {
 #if WITH_LIVEKIT_WINDOWS
-        if (GWindowsSdkAvailable && GWindowsSdkInitializationOwned)
+        TArray<TSharedPtr<FLiveKitWindowsBridge, ESPMode::ThreadSafe>> ActiveBridges;
+        {
+            FScopeLock Lock(&GWindowsBridgeRegistryMutex);
+            GWindowsModuleShuttingDown = true;
+            GWindowsSdkAvailable.store(false, std::memory_order_release);
+            ActiveBridges.Reserve(GWindowsBridges.Num());
+            for (const TSharedPtr<FLiveKitWindowsBridge, ESPMode::ThreadSafe>& Bridge :
+                 GWindowsBridges)
+            {
+                if (Bridge)
+                {
+                    ActiveBridges.Add(Bridge);
+                }
+            }
+            GWindowsBridges.Reset();
+        }
+
+        // Stop every bridge and transfer any listener-ambiguous terminal Room
+        // to quarantine before the process-global SDK drains callbacks.
+        for (const TSharedPtr<FLiveKitWindowsBridge, ESPMode::ThreadSafe>& Bridge :
+             ActiveBridges)
+        {
+            Bridge->Shutdown();
+        }
+
+        if (GWindowsSdkInitializationOwned)
         {
             livekit::shutdown();
         }
-        GWindowsSdkAvailable = false;
         GWindowsSdkInitializationOwned = false;
+
+        // SDK shutdown is the only public barrier that guarantees every
+        // ListenerSlot callback has returned. Release terminal Rooms after it,
+        // while the C++ DLL is still loaded.
+        TArray<std::shared_ptr<livekit::Room>> QuarantinedRooms;
+        {
+            FScopeLock Lock(&GWindowsBridgeRegistryMutex);
+            QuarantinedRooms = MoveTemp(GWindowsRoomQuarantine);
+            GWindowsRoomQuarantine.Reset();
+        }
+        QuarantinedRooms.Reset();
+        ActiveBridges.Reset();
         ReleaseWindowsLibraries();
 #endif
     }

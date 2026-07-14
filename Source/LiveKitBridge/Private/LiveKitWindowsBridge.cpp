@@ -2,6 +2,8 @@
 
 #include "Async/Async.h"
 #include "LiveKitBridgeModule.h"
+#include "LiveKitWindowsSdkV130Access.h"
+#include "Misc/ScopeExit.h"
 
 #include <atomic>
 #include <chrono>
@@ -84,10 +86,28 @@ struct FLiveKitWindowsBridge::FImplementation final : public livekit::RoomDelega
         std::string ErrorData;
     };
 
+    struct FTrackedByteStreamReader
+    {
+        std::shared_ptr<livekit::ByteStreamReader> Reader;
+        std::string Topic;
+        uint64 ConnectionGeneration = 0;
+        uint64 RegistrationGeneration = 0;
+    };
+
+    enum class EShutdownState : uint8
+    {
+        Running,
+        InProgress,
+        Complete
+    };
+
     static constexpr int32 MaxConcurrentByteStreamReaders = 4;
 
     TWeakPtr<FLiveKitWindowsBridge, ESPMode::ThreadSafe> Owner;
     std::atomic_bool bShuttingDown{false};
+    std::mutex ShutdownMutex;
+    std::condition_variable ShutdownFinished;
+    EShutdownState ShutdownState = EShutdownState::Running;
     std::mutex TaskMutex;
     std::condition_variable TasksFinished;
     bool bAcceptingTasks = true;
@@ -126,6 +146,12 @@ struct FLiveKitWindowsBridge::FImplementation final : public livekit::RoomDelega
 
     std::mutex PendingRpcMutex;
     std::unordered_map<std::string, std::shared_ptr<FPendingRpc>> PendingRpcs;
+    bool bRpcAdmissionOpen = false;
+    uint64 RpcAdmissionGeneration = 0;
+
+    std::mutex ByteStreamReaderMutex;
+    std::unordered_map<const livekit::ByteStreamReader*, FTrackedByteStreamReader>
+        TrackedByteStreamReaders;
 
     bool TryStartTask(bool bByteStreamReader)
     {
@@ -178,6 +204,159 @@ struct FLiveKitWindowsBridge::FImplementation final : public livekit::RoomDelega
         });
     }
 
+    bool BeginShutdown()
+    {
+        std::unique_lock Lock(ShutdownMutex);
+        if (ShutdownState == EShutdownState::Complete)
+        {
+            return false;
+        }
+        if (ShutdownState == EShutdownState::InProgress)
+        {
+            ShutdownFinished.wait(Lock, [this]()
+            {
+                return ShutdownState == EShutdownState::Complete;
+            });
+            return false;
+        }
+
+        ShutdownState = EShutdownState::InProgress;
+        bShuttingDown.store(true, std::memory_order_release);
+        return true;
+    }
+
+    void CompleteShutdown()
+    {
+        {
+            std::lock_guard Lock(ShutdownMutex);
+            ShutdownState = EShutdownState::Complete;
+        }
+        ShutdownFinished.notify_all();
+    }
+
+    static void CloseByteStreamReaders(
+        const std::vector<std::shared_ptr<livekit::ByteStreamReader>>& Readers)
+    {
+        for (const std::shared_ptr<livekit::ByteStreamReader>& Reader : Readers)
+        {
+            if (!Reader)
+            {
+                continue;
+            }
+            try
+            {
+                LiveKitWindowsSdkV130Access::CloseByteStreamReader(*Reader);
+            }
+            catch (...)
+            {
+                // Waking readers is best-effort. The tracked task remains part
+                // of the shutdown barrier if the pinned SDK ever changes.
+            }
+        }
+    }
+
+    bool TryTrackByteStreamReader(
+        const std::shared_ptr<livekit::ByteStreamReader>& Reader,
+        const livekit::Room* CandidateRoom,
+        const std::string& Topic,
+        uint64 InConnectionGeneration,
+        uint64 InRegistrationGeneration)
+    {
+        if (!Reader || !CandidateRoom)
+        {
+            return false;
+        }
+
+        // Room -> registration -> reader is the admission lock order. A
+        // disconnect changes the room generation before cancelling readers;
+        // an unregister removes the registration before cancelling its topic.
+        // Therefore every admitted reader is either observed by cancellation
+        // or rejected after the state transition.
+        std::lock_guard RoomLock(RoomMutex);
+        if (Room.get() != CandidateRoom || RoomGeneration != InConnectionGeneration ||
+            RoomGeneration != ConnectionGeneration.load(std::memory_order_acquire) ||
+            !bConnectionRequested.load(std::memory_order_acquire) ||
+            bShuttingDown.load(std::memory_order_acquire))
+        {
+            return false;
+        }
+
+        std::lock_guard RegistrationLock(RegistrationMutex);
+        const auto Registration = ByteStreamTopics.find(Topic);
+        if (Registration == ByteStreamTopics.end() ||
+            Registration->second != InRegistrationGeneration)
+        {
+            return false;
+        }
+
+        std::lock_guard ReaderLock(ByteStreamReaderMutex);
+        return TrackedByteStreamReaders.emplace(
+            Reader.get(),
+            FTrackedByteStreamReader{
+                Reader,
+                Topic,
+                InConnectionGeneration,
+                InRegistrationGeneration}).second;
+    }
+
+    void UntrackByteStreamReader(const livekit::ByteStreamReader* Reader)
+    {
+        std::lock_guard Lock(ByteStreamReaderMutex);
+        TrackedByteStreamReaders.erase(Reader);
+    }
+
+    void CancelTrackedByteStreamReader(const livekit::ByteStreamReader* Reader)
+    {
+        std::vector<std::shared_ptr<livekit::ByteStreamReader>> ReaderToClose;
+        {
+            std::lock_guard Lock(ByteStreamReaderMutex);
+            const auto Iterator = TrackedByteStreamReaders.find(Reader);
+            if (Iterator != TrackedByteStreamReaders.end())
+            {
+                ReaderToClose.push_back(Iterator->second.Reader);
+                TrackedByteStreamReaders.erase(Iterator);
+            }
+        }
+        CloseByteStreamReaders(ReaderToClose);
+    }
+
+    void CancelAllTrackedByteStreamReaders()
+    {
+        std::vector<std::shared_ptr<livekit::ByteStreamReader>> Readers;
+        {
+            std::lock_guard Lock(ByteStreamReaderMutex);
+            Readers.reserve(TrackedByteStreamReaders.size());
+            for (const auto& Pair : TrackedByteStreamReaders)
+            {
+                Readers.push_back(Pair.second.Reader);
+            }
+            TrackedByteStreamReaders.clear();
+        }
+        CloseByteStreamReaders(Readers);
+    }
+
+    void CancelTrackedByteStreamReadersForTopic(const std::string& Topic)
+    {
+        std::vector<std::shared_ptr<livekit::ByteStreamReader>> Readers;
+        {
+            std::lock_guard Lock(ByteStreamReaderMutex);
+            for (auto Iterator = TrackedByteStreamReaders.begin();
+                 Iterator != TrackedByteStreamReaders.end();)
+            {
+                if (Iterator->second.Topic == Topic)
+                {
+                    Readers.push_back(Iterator->second.Reader);
+                    Iterator = TrackedByteStreamReaders.erase(Iterator);
+                }
+                else
+                {
+                    ++Iterator;
+                }
+            }
+        }
+        CloseByteStreamReaders(Readers);
+    }
+
     uint64 ReserveControlTicket()
     {
         std::lock_guard Lock(ControlOrderMutex);
@@ -224,16 +403,28 @@ struct FLiveKitWindowsBridge::FImplementation final : public livekit::RoomDelega
 
     uint64 BeginConnectionRequest()
     {
-        std::lock_guard Lock(RoomMutex);
-        bConnectionRequested.store(true, std::memory_order_release);
-        return ConnectionGeneration.fetch_add(1, std::memory_order_acq_rel) + 1;
+        uint64 Generation = 0;
+        {
+            std::lock_guard Lock(RoomMutex);
+            bConnectionRequested.store(true, std::memory_order_release);
+            Generation = ConnectionGeneration.fetch_add(1, std::memory_order_acq_rel) + 1;
+        }
+        CancelPendingRpcs("The LiveKit room connection was replaced.");
+        CancelAllTrackedByteStreamReaders();
+        return Generation;
     }
 
     uint64 InvalidateConnectionRequest()
     {
-        std::lock_guard Lock(RoomMutex);
-        bConnectionRequested.store(false, std::memory_order_release);
-        return ConnectionGeneration.fetch_add(1, std::memory_order_acq_rel) + 1;
+        uint64 Generation = 0;
+        {
+            std::lock_guard Lock(RoomMutex);
+            bConnectionRequested.store(false, std::memory_order_release);
+            Generation = ConnectionGeneration.fetch_add(1, std::memory_order_acq_rel) + 1;
+        }
+        CancelPendingRpcs("The LiveKit room disconnected.");
+        CancelAllTrackedByteStreamReaders();
+        return Generation;
     }
 
     bool IsConnectionRequestCurrent(uint64 Generation)
@@ -303,6 +494,32 @@ struct FLiveKitWindowsBridge::FImplementation final : public livekit::RoomDelega
         }
     }
 
+    bool DisconnectRoomOrQuarantine(const std::shared_ptr<livekit::Room>& Candidate)
+    {
+        if (!Candidate)
+        {
+            return true;
+        }
+
+        try
+        {
+            Candidate->setDelegate(nullptr);
+            const bool bListenerDrained = Candidate->disconnect();
+            if (!bListenerDrained)
+            {
+                QuarantineLiveKitWindowsRoom(Candidate);
+            }
+            return bListenerDrained;
+        }
+        catch (...)
+        {
+            // A failed disconnect cannot prove that the SDK's raw-this room
+            // listener was removed. Keep the Room alive through SDK shutdown.
+            QuarantineLiveKitWindowsRoom(Candidate);
+            throw;
+        }
+    }
+
     bool IsCurrentRoom(const livekit::Room* Candidate, uint64 Generation = 0)
     {
         std::lock_guard Lock(RoomMutex);
@@ -327,6 +544,11 @@ struct FLiveKitWindowsBridge::FImplementation final : public livekit::RoomDelega
             return false;
         }
         bRoomReady = true;
+        {
+            std::lock_guard PendingLock(PendingRpcMutex);
+            bRpcAdmissionOpen = true;
+            RpcAdmissionGeneration = Generation;
+        }
         return true;
     }
 
@@ -339,47 +561,68 @@ struct FLiveKitWindowsBridge::FImplementation final : public livekit::RoomDelega
             !bShuttingDown.load(std::memory_order_acquire);
     }
 
-    bool RetireTerminalRoomIfCurrent(const livekit::Room* Candidate)
+    bool DetachTerminalRoom(
+        const livekit::Room* Candidate,
+        std::shared_ptr<livekit::Room>& OutRoom,
+        bool& bOutShouldNotify)
     {
-        std::lock_guard Lock(RoomMutex);
-        if (!Candidate || Room.get() != Candidate ||
-            RoomGeneration != ConnectionGeneration.load(std::memory_order_acquire))
         {
-            return false;
-        }
+            std::lock_guard Lock(RoomMutex);
+            if (!Candidate || Room.get() != Candidate)
+            {
+                return false;
+            }
 
-        Room.reset();
-        RoomGeneration = 0;
-        bRoomReady = false;
-        bConnectionRequested.store(false, std::memory_order_release);
-        ConnectionGeneration.fetch_add(1, std::memory_order_acq_rel);
+            OutRoom = MoveTemp(Room);
+            const uint64 CurrentGeneration =
+                ConnectionGeneration.load(std::memory_order_acquire);
+            const bool bHasNewerConnectionRequest =
+                bConnectionRequested.load(std::memory_order_acquire) &&
+                RoomGeneration != CurrentGeneration;
+            RoomGeneration = 0;
+            bRoomReady = false;
+
+            if (bHasNewerConnectionRequest)
+            {
+                // The terminal callback belongs to the room being replaced.
+                // Preserve the newer request and its generation.
+                bOutShouldNotify = false;
+            }
+            else if (bConnectionRequested.exchange(false, std::memory_order_acq_rel))
+            {
+                ConnectionGeneration.fetch_add(1, std::memory_order_acq_rel);
+                bOutShouldNotify = true;
+            }
+            else
+            {
+                // Explicit disconnect already invalidated the request. Notify
+                // here as well because this callback may detach the room before
+                // the queued disconnect work observes it. State is de-duplicated
+                // by the subsystem. Shutdown suppresses user-facing callbacks.
+                bOutShouldNotify =
+                    !bShuttingDown.load(std::memory_order_acquire);
+            }
+        }
+        CancelPendingRpcs("The LiveKit room disconnected.");
+        CancelAllTrackedByteStreamReaders();
         return true;
     }
 
     bool FailConnectionRequestIfCurrent(
         uint64 Generation,
-        const std::shared_ptr<livekit::Room>& Candidate)
+        const std::shared_ptr<livekit::Room>&)
     {
-        std::lock_guard Lock(RoomMutex);
-        if (ConnectionGeneration.load(std::memory_order_acquire) != Generation)
         {
-            if (Room == Candidate)
+            std::lock_guard Lock(RoomMutex);
+            if (ConnectionGeneration.load(std::memory_order_acquire) != Generation)
             {
-                Room.reset();
-                RoomGeneration = 0;
-                bRoomReady = false;
+                return false;
             }
-            return false;
+            bConnectionRequested.store(false, std::memory_order_release);
+            ConnectionGeneration.fetch_add(1, std::memory_order_acq_rel);
         }
-
-        if (Room == Candidate)
-        {
-            Room.reset();
-            RoomGeneration = 0;
-            bRoomReady = false;
-        }
-        bConnectionRequested.store(false, std::memory_order_release);
-        ConnectionGeneration.fetch_add(1, std::memory_order_acq_rel);
+        CancelPendingRpcs("The LiveKit room connection failed.");
+        CancelAllTrackedByteStreamReaders();
         return true;
     }
 
@@ -498,13 +741,16 @@ struct FLiveKitWindowsBridge::FImplementation final : public livekit::RoomDelega
         const std::string& Topic,
         uint64 Generation)
     {
-        std::lock_guard Lock(RegistrationMutex);
-        const auto Iterator = ByteStreamTopics.find(Topic);
-        if (Iterator == ByteStreamTopics.end() || Iterator->second != Generation)
         {
-            return false;
+            std::lock_guard Lock(RegistrationMutex);
+            const auto Iterator = ByteStreamTopics.find(Topic);
+            if (Iterator == ByteStreamTopics.end() || Iterator->second != Generation)
+            {
+                return false;
+            }
+            ByteStreamTopics.erase(Iterator);
         }
-        ByteStreamTopics.erase(Iterator);
+        CancelTrackedByteStreamReadersForTopic(Topic);
         return true;
     }
 
@@ -545,25 +791,31 @@ struct FLiveKitWindowsBridge::FImplementation final : public livekit::RoomDelega
                 {
                     const std::shared_ptr<livekit::Room> HandlerRoom = WeakRoom.lock();
                     if (!HandlerRoom ||
-                        !Pinned->Implementation->IsCurrentRoom(
+                        !Pinned->Implementation->TryTrackByteStreamReader(
+                            Reader,
                             HandlerRoom.get(),
-                            InConnectionGeneration) ||
-                        !Pinned->Implementation->IsByteStreamRegistrationCurrent(
                             Topic,
+                            InConnectionGeneration,
                             InRegistrationGeneration))
                     {
                         return;
                     }
 
+                    const livekit::ByteStreamReader* ReaderIdentity = Reader.get();
                     const bool bDispatched = Pinned->DispatchByteStream(
                         [
-                            Reader = MoveTemp(Reader),
+                            Reader,
                             ParticipantIdentity,
                             HandlerRoom,
                             Topic,
                             InConnectionGeneration,
                             InRegistrationGeneration](FLiveKitWindowsBridge& Bridge)
                         {
+                            ON_SCOPE_EXIT
+                            {
+                                Bridge.Implementation->UntrackByteStreamReader(Reader.get());
+                            };
+
                             bool bTooLarge = false;
                             TArray<uint8> Bytes;
                             const livekit::ByteStreamInfo& InitialInfo = Reader->info();
@@ -572,12 +824,13 @@ struct FLiveKitWindowsBridge::FImplementation final : public livekit::RoomDelega
                                     static_cast<size_t>(LiveKitLimits::MaxIncomingByteStreamBytes))
                             {
                                 bTooLarge = true;
+                                LiveKitWindowsSdkV130Access::CloseByteStreamReader(*Reader);
                             }
 
                             try
                             {
                                 std::vector<std::uint8_t> Chunk;
-                                while (Reader->readNext(Chunk))
+                                while (!bTooLarge && Reader->readNext(Chunk))
                                 {
                                     if (!Bridge.Implementation->IsCurrentRoom(
                                             HandlerRoom.get(),
@@ -604,6 +857,8 @@ struct FLiveKitWindowsBridge::FImplementation final : public livekit::RoomDelega
                                     else
                                     {
                                         bTooLarge = true;
+                                        LiveKitWindowsSdkV130Access::CloseByteStreamReader(*Reader);
+                                        break;
                                     }
                                     Chunk.clear();
                                 }
@@ -658,6 +913,10 @@ struct FLiveKitWindowsBridge::FImplementation final : public livekit::RoomDelega
                             Bridge.ByteStreamHandler(Stream);
                         });
 
+                    if (!bDispatched)
+                    {
+                        Pinned->Implementation->CancelTrackedByteStreamReader(ReaderIdentity);
+                    }
                     if (!bDispatched &&
                         Pinned->Implementation->IsCurrentRoom(
                             HandlerRoom.get(),
@@ -671,6 +930,20 @@ struct FLiveKitWindowsBridge::FImplementation final : public livekit::RoomDelega
                     }
                 }
             });
+    }
+
+    bool TryAdmitPendingRpc(
+        const std::string& RequestId,
+        const std::shared_ptr<FPendingRpc>& Pending,
+        uint64 InConnectionGeneration)
+    {
+        std::lock_guard Lock(PendingRpcMutex);
+        if (!bRpcAdmissionOpen || RpcAdmissionGeneration != InConnectionGeneration ||
+            bShuttingDown.load(std::memory_order_acquire))
+        {
+            return false;
+        }
+        return PendingRpcs.emplace(RequestId, Pending).second;
     }
 
     std::optional<std::string> HandleIncomingRpc(
@@ -689,10 +962,20 @@ struct FLiveKitWindowsBridge::FImplementation final : public livekit::RoomDelega
         }
 
         const std::shared_ptr<FPendingRpc> Pending = std::make_shared<FPendingRpc>();
+        if (!TryAdmitPendingRpc(Data.request_id, Pending, InConnectionGeneration))
+        {
+            throw livekit::RpcError::builtIn(
+                livekit::RpcError::ErrorCode::APPLICATION_ERROR);
+        }
+        ON_SCOPE_EXIT
         {
             std::lock_guard Lock(PendingRpcMutex);
-            PendingRpcs[Data.request_id] = Pending;
-        }
+            const auto Iterator = PendingRpcs.find(Data.request_id);
+            if (Iterator != PendingRpcs.end() && Iterator->second == Pending)
+            {
+                PendingRpcs.erase(Iterator);
+            }
+        };
 
         FLiveKitRpcInvocation Invocation;
         Invocation.RequestId = FromLiveKitString(Data.request_id);
@@ -710,11 +993,6 @@ struct FLiveKitWindowsBridge::FImplementation final : public livekit::RoomDelega
                 Lock,
                 std::chrono::duration<double>(TimeoutSeconds),
                 [&Pending]() { return Pending->bCompleted; });
-        }
-
-        {
-            std::lock_guard Lock(PendingRpcMutex);
-            PendingRpcs.erase(Data.request_id);
         }
 
         if (!bReady)
@@ -917,11 +1195,13 @@ struct FLiveKitWindowsBridge::FImplementation final : public livekit::RoomDelega
         return true;
     }
 
-    void CancelPendingRpcs()
+    void CancelPendingRpcs(const char* Reason = "The LiveKit client is shutting down.")
     {
         std::vector<std::shared_ptr<FPendingRpc>> Pending;
         {
             std::lock_guard Lock(PendingRpcMutex);
+            bRpcAdmissionOpen = false;
+            RpcAdmissionGeneration = 0;
             for (const auto& Pair : PendingRpcs)
             {
                 Pending.push_back(Pair.second);
@@ -933,9 +1213,12 @@ struct FLiveKitWindowsBridge::FImplementation final : public livekit::RoomDelega
         {
             {
                 std::lock_guard Lock(Invocation->Mutex);
-                Invocation->bCompleted = true;
-                Invocation->bFailed = true;
-                Invocation->ErrorMessage = "The LiveKit client is shutting down.";
+                if (!Invocation->bCompleted)
+                {
+                    Invocation->bCompleted = true;
+                    Invocation->bFailed = true;
+                    Invocation->ErrorMessage = Reason;
+                }
             }
             Invocation->Ready.notify_all();
         }
@@ -1052,21 +1335,44 @@ struct FLiveKitWindowsBridge::FImplementation final : public livekit::RoomDelega
         }
     }
 
+    void HandleTerminalRoom(livekit::Room& InRoom)
+    {
+        std::shared_ptr<livekit::Room> TerminalRoom;
+        bool bShouldNotify = false;
+        if (!DetachTerminalRoom(&InRoom, TerminalRoom, bShouldNotify))
+        {
+            return;
+        }
+
+        // Room 1.3.0 keeps a raw-this FFI listener after the Disconnected
+        // event and removes it only at EOS. Never destroy a terminal Room from
+        // either delegate callback; global SDK shutdown is the drain barrier.
+        QuarantineLiveKitWindowsRoom(TerminalRoom);
+        TerminalRoom->setDelegate(nullptr);
+        ClearAudio();
+        ClearSpeakers();
+
+        if (bShouldNotify)
+        {
+            if (const TSharedPtr<FLiveKitWindowsBridge, ESPMode::ThreadSafe> Pinned = Owner.Pin())
+            {
+                Pinned->StateHandler(ELiveKitConnectionState::Disconnected);
+            }
+        }
+    }
+
     virtual void onDisconnected(
         livekit::Room& InRoom,
         const livekit::DisconnectedEvent&) override
     {
-        if (!IsCurrentRoomReady(&InRoom) ||
-            !RetireTerminalRoomIfCurrent(&InRoom))
-        {
-            return;
-        }
-        ClearSpeakers();
-        ClearAudio();
-        if (const TSharedPtr<FLiveKitWindowsBridge, ESPMode::ThreadSafe> Pinned = Owner.Pin())
-        {
-            Pinned->StateHandler(ELiveKitConnectionState::Disconnected);
-        }
+        HandleTerminalRoom(InRoom);
+    }
+
+    virtual void onRoomEos(
+        livekit::Room& InRoom,
+        const livekit::RoomEosEvent&) override
+    {
+        HandleTerminalRoom(InRoom);
     }
 
     virtual void onReconnecting(
@@ -1169,6 +1475,7 @@ void FLiveKitWindowsBridge::ActivateLifetimeGate()
 {
 #if WITH_LIVEKIT_WINDOWS
     Implementation->Owner = AsShared();
+    RegisterLiveKitWindowsBridge(AsShared());
 #endif
 }
 
@@ -1203,7 +1510,22 @@ bool FLiveKitWindowsBridge::DispatchControl(TFunction<void(FLiveKitWindowsBridge
     {
         Async(EAsyncExecution::Thread, [Self, ControlTicket, Work = MoveTemp(Work)]() mutable
         {
+            bool bOwnsControlTurn = false;
+            ON_SCOPE_EXIT
+            {
+                if (bOwnsControlTurn)
+                {
+                    Self->Implementation->FinishControlTicket(ControlTicket);
+                }
+                else
+                {
+                    Self->Implementation->AbandonControlTicket(ControlTicket);
+                }
+                Self->Implementation->TaskFinished(false);
+            };
+
             Self->Implementation->WaitForControlTurn(ControlTicket);
+            bOwnsControlTurn = true;
             {
                 std::lock_guard ControlLock(Self->Implementation->ControlMutex);
                 if (!Self->Implementation->bShuttingDown.load(std::memory_order_acquire))
@@ -1224,8 +1546,6 @@ bool FLiveKitWindowsBridge::DispatchControl(TFunction<void(FLiveKitWindowsBridge
                     }
                 }
             }
-            Self->Implementation->FinishControlTicket(ControlTicket);
-            Self->Implementation->TaskFinished(false);
         });
     }
     catch (...)
@@ -1254,6 +1574,11 @@ bool FLiveKitWindowsBridge::DispatchByteStream(
     {
         Async(EAsyncExecution::Thread, [Self, Work = MoveTemp(Work)]() mutable
         {
+            ON_SCOPE_EXIT
+            {
+                Self->Implementation->TaskFinished(true);
+            };
+
             if (!Self->Implementation->bShuttingDown.load(std::memory_order_acquire))
             {
                 try
@@ -1271,7 +1596,6 @@ bool FLiveKitWindowsBridge::DispatchByteStream(
                         TEXT("A LiveKit byte-stream reader raised an unknown error.")));
                 }
             }
-            Self->Implementation->TaskFinished(true);
         });
     }
     catch (...)
@@ -1287,30 +1611,35 @@ bool FLiveKitWindowsBridge::DispatchByteStream(
 
 void FLiveKitWindowsBridge::Shutdown()
 {
-    if (!Implementation ||
-        Implementation->bShuttingDown.exchange(true, std::memory_order_acq_rel))
+    if (!Implementation)
     {
         return;
     }
 
 #if WITH_LIVEKIT_WINDOWS
+    if (!Implementation->BeginShutdown())
+    {
+        return;
+    }
+    ON_SCOPE_EXIT
+    {
+        Implementation->CompleteShutdown();
+    };
+
     Implementation->StopAcceptingTasks();
     Implementation->InvalidateConnectionRequest();
-    Implementation->CancelPendingRpcs();
 
     {
         std::lock_guard ControlLock(Implementation->ControlMutex);
         if (const std::shared_ptr<livekit::Room> Room = Implementation->GetRoom())
         {
-            Room->setDelegate(nullptr);
             try
             {
-                Room->disconnect();
+                Implementation->DisconnectRoomOrQuarantine(Room);
             }
             catch (...)
             {
-                // Shutdown is best-effort; the SDK is unloaded only after all
-                // tracked work has joined below.
+                // The helper quarantines on failure; shutdown remains best-effort.
             }
             Implementation->ClearRoomIf(Room);
         }
@@ -1320,6 +1649,8 @@ void FLiveKitWindowsBridge::Shutdown()
 
     Implementation->WaitForTasks();
     Implementation->Owner.Reset();
+#else
+    Implementation->bShuttingDown.store(true, std::memory_order_release);
 #endif
 }
 
@@ -1352,17 +1683,26 @@ void FLiveKitWindowsBridge::Connect(
         }
 
         std::shared_ptr<livekit::Room> Room;
-        auto CleanupRoom = [&Bridge, &Room]()
+        bool bRoomListenerKnownDrained = false;
+        auto CleanupRoom = [&Bridge, &Room, &bRoomListenerKnownDrained]()
         {
             if (Room)
             {
-                Room->setDelegate(nullptr);
-                try
+                if (!bRoomListenerKnownDrained)
                 {
-                    Room->disconnect();
+                    try
+                    {
+                        Bridge.Implementation->DisconnectRoomOrQuarantine(Room);
+                    }
+                    catch (...)
+                    {
+                    }
                 }
-                catch (...)
+                else
                 {
+                    // Room::connect(false) already removes and drains the SDK
+                    // listener, so this never-connected instance is safe to drop.
+                    Room->setDelegate(nullptr);
                 }
                 Bridge.Implementation->ClearRoomIf(Room);
             }
@@ -1375,10 +1715,9 @@ void FLiveKitWindowsBridge::Connect(
             if (const std::shared_ptr<livekit::Room> PreviousRoom =
                     Bridge.Implementation->GetRoom())
             {
-                PreviousRoom->setDelegate(nullptr);
                 try
                 {
-                    PreviousRoom->disconnect();
+                    Bridge.Implementation->DisconnectRoomOrQuarantine(PreviousRoom);
                 }
                 catch (...)
                 {
@@ -1415,6 +1754,7 @@ void FLiveKitWindowsBridge::Connect(
                 Options);
             if (!bConnected)
             {
+                bRoomListenerKnownDrained = true;
                 CleanupRoom();
                 if (Bridge.Implementation->FailConnectionRequestIfCurrent(
                         ConnectionGeneration,
@@ -1455,6 +1795,22 @@ void FLiveKitWindowsBridge::Connect(
                 Bridge);
             if (Bridge.Implementation->MarkRoomReady(Room.get(), ConnectionGeneration))
             {
+                // The SDK can finish its initial participant synchronization before
+                // the room delegate becomes observable to this bridge. Seed the
+                // current snapshot so callers always receive every participant that
+                // was already in the room when connect completed. The subsystem
+                // de-duplicates any delegate event that raced with this snapshot.
+                for (const std::weak_ptr<livekit::RemoteParticipant>& WeakParticipant :
+                     Room->remoteParticipants())
+                {
+                    if (const std::shared_ptr<livekit::RemoteParticipant> Participant =
+                            WeakParticipant.lock())
+                    {
+                        Bridge.ParticipantConnectedHandler(ToParticipantInfo(
+                            *Participant,
+                            Bridge.Implementation->IsSpeaking(Participant->identity())));
+                    }
+                }
                 Bridge.StateHandler(ELiveKitConnectionState::Connected);
             }
             else
@@ -1510,17 +1866,21 @@ void FLiveKitWindowsBridge::Disconnect()
     const bool bDispatched = DispatchControl([DisconnectGeneration](FLiveKitWindowsBridge& Bridge)
     {
 #if WITH_LIVEKIT_WINDOWS
-        Bridge.Implementation->CancelPendingRpcs();
         if (const std::shared_ptr<livekit::Room> Room = Bridge.Implementation->GetRoom())
         {
-            Room->setDelegate(nullptr);
             try
             {
-                Room->disconnect();
+                Bridge.Implementation->DisconnectRoomOrQuarantine(Room);
             }
             catch (const std::exception& Error)
             {
                 Bridge.ErrorHandler(ExceptionError(TEXT("disconnect_failed"), Error));
+            }
+            catch (...)
+            {
+                Bridge.ErrorHandler(MakeLiveKitError(
+                    TEXT("disconnect_failed"),
+                    TEXT("The LiveKit room raised an unknown error while disconnecting.")));
             }
             Bridge.Implementation->ClearRoomIf(Room);
         }
@@ -1718,6 +2078,7 @@ void FLiveKitWindowsBridge::UnregisterByteStreamHandler(const FString& Topic)
         std::lock_guard Lock(Implementation->RegistrationMutex);
         Implementation->ByteStreamTopics.erase(LiveKitTopic);
     }
+    Implementation->CancelTrackedByteStreamReadersForTopic(LiveKitTopic);
     DispatchControl([LiveKitTopic](FLiveKitWindowsBridge& Bridge)
     {
         if (const std::shared_ptr<livekit::Room> Room = Bridge.Implementation->GetRoom())
