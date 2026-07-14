@@ -1,6 +1,6 @@
 # Third-Party Notices and Release Gate
 
-LiveKit for Unreal downloads and redistributes the following pinned dependencies in its Apple release archive. The corresponding source repositories and license texts are listed here.
+LiveKit for Unreal downloads the following pinned dependencies for its Apple and Windows builds. The corresponding source repositories and known license texts are listed here.
 
 The machine-readable companion inventory is `THIRD_PARTY_COMPONENTS.json`. It distinguishes runtime dependencies from build-only tools and records whether binary redistribution has enough upstream provenance to pass this project's release policy.
 
@@ -23,6 +23,22 @@ The machine-readable companion inventory is `THIRD_PARTY_COMPONENTS.json`. It di
 The upstream 0.0.6 binary release publishes the XCFramework and wrapper license, but does not publish the source revision used to build the Rust library, its `Cargo.lock`, an SBOM, or a transitive license inventory. The wrapper's Apache-2.0 license does not by itself identify every Rust crate incorporated into the compiled binary.
 
 Accordingly, source publication of this Unreal integration is approved, but redistribution of the RustLiveKitUniFFI binary is blocked until upstream provenance is available or an independently reproducible source build and complete transitive license report are produced and reviewed.
+
+## LiveKit C++ SDK for Windows x64
+
+- Version: 1.3.0
+- Source: <https://github.com/livekit/client-sdk-cpp/tree/v1.3.0>
+- Binary distribution: <https://github.com/livekit/client-sdk-cpp/releases/tag/v1.3.0>
+- Artifact: `livekit-sdk-windows-x64-1.3.0.zip`
+- SHA-256: `27a8707348d7fb094023b7c8af29e26b8e4085a4dab75d26be3968f29b2269c3`
+- License: Apache License 2.0, reproduced in this repository's `LICENSE`
+- Runtime binaries: `livekit.dll` and `livekit_ffi.dll`
+
+### Binary attribution limitation
+
+The pinned archive includes compiled LiveKit C++ and FFI runtime libraries. Its release metadata is sufficient to pin and verify the exact downloaded archive, but this project has not received and reviewed a complete transitive component and license inventory for every library incorporated into those binaries. The generated SDK directory is therefore suitable for local source builds under the project's current development workflow, but it is not evidence of public binary redistribution approval.
+
+Redistribution of Windows packages containing these DLLs remains blocked until their transitive inventory, applicable license texts and notices, and archive contents have been reviewed and recorded in `THIRD_PARTY_COMPONENTS.json`.
 
 ## SwiftProtobuf
 
@@ -103,7 +119,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## Release policy
 
 - Public source: approved. Download scripts fetch the pinned upstream binaries directly and verify their checksums.
-- Prebuilt binary plugin: blocked. The binary release gate remains closed because RustLiveKitUniFFI 0.0.6 lacks a reproducible transitive component and license inventory.
+- Prebuilt binary plugin: blocked. The binary release gate remains closed because RustLiveKitUniFFI 0.0.6 lacks a reproducible transitive component and license inventory, and the LiveKit C++ SDK 1.3.0 Windows binaries have not completed transitive attribution review.
 - Reopening the binary gate requires updating `THIRD_PARTY_COMPONENTS.json`, preserving every applicable license and notice in the archive, running `Scripts/verify-release-compliance.sh binary`, and recording human review of the generated inventory.
 
 This is an engineering attribution record, not legal advice.

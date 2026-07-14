@@ -6,6 +6,11 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Pinned, checksum-verified LiveKit C++ SDK 1.3.0 dependency bootstrap for Windows x64, with atomic SDK replacement and installed-file verification.
+- Windows SDK provenance and transitive-license review status in the third-party component inventory and notices.
+
 ## [0.2.0] - 2026-07-13
 
 ### Added

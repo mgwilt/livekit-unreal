@@ -4,8 +4,46 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Engine/GameInstance.h"
+#include "HAL/FileManager.h"
+#include "HAL/PlatformProcess.h"
+#include "LiveKitBridgeModule.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/Paths.h"
+#include "Modules/ModuleManager.h"
 #include "UObject/UnrealType.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FLiveKitWindowsDependencyDiscoveryTest,
+    "LiveKitBridge.Windows.DependencyDiscovery",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FLiveKitWindowsDependencyDiscoveryTest::RunTest(const FString& Parameters)
+{
+#if PLATFORM_WINDOWS && WITH_LIVEKIT_WINDOWS
+#if !IS_MONOLITHIC
+    const FString ModuleFilename =
+        FModuleManager::Get().GetModuleFilename(FName(TEXT("LiveKitBridge")));
+    TestFalse(TEXT("LiveKitBridge module filename is available"), ModuleFilename.IsEmpty());
+    const FString ModuleDirectory = FPaths::GetPath(ModuleFilename);
+#else
+    const FString ModuleDirectory = FPlatformProcess::BaseDir();
+#endif
+    TestTrue(
+        TEXT("livekit_ffi.dll is staged beside the editor module"),
+        IFileManager::Get().FileExists(
+            *FPaths::Combine(ModuleDirectory, TEXT("livekit_ffi.dll"))));
+    TestTrue(
+        TEXT("livekit.dll is staged beside the editor module"),
+        IFileManager::Get().FileExists(
+            *FPaths::Combine(ModuleDirectory, TEXT("livekit.dll"))));
+    TestTrue(
+        TEXT("Verified LiveKit C++ SDK initialized"),
+        IsLiveKitWindowsSdkInitialized());
+#else
+    TestTrue(TEXT("No verified Win64 SDK is expected for this target"), true);
+#endif
+    return true;
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     FLiveKitConnectionValidationTest,

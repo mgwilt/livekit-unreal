@@ -24,6 +24,11 @@
 /Source/ThirdParty/Apple/Mac/
 /Source/ThirdParty/Apple/Facade/
 
+# Downloaded Windows C++ SDK (the lock file remains tracked)
+/Source/ThirdParty/Windows/SDK/
+/Source/ThirdParty/Windows/*.download
+/Source/ThirdParty/Windows/.extract/
+
 # Credentials never belong in the plugin repository
 .env
 .env.*

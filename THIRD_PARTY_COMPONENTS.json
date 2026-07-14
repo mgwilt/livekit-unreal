@@ -3,7 +3,7 @@
   "release_policy": {
     "source_publication": "approved",
     "binary_redistribution": "blocked",
-    "binary_blocker": "RustLiveKitUniFFI 0.0.6 does not publish a reproducible source revision, Cargo.lock, SBOM, or transitive license inventory for its release binary."
+    "binary_blocker": "RustLiveKitUniFFI 0.0.6 lacks reproducible transitive provenance, and the LiveKit C++ SDK 1.3.0 Windows archive lacks a complete reviewed transitive license inventory for the redistributed binaries."
   },
   "components": [
     {
@@ -14,6 +14,18 @@
       "license": "Apache-2.0",
       "runtime": true,
       "notice": "Copyright 2023 LiveKit, Inc."
+    },
+    {
+      "name": "LiveKit C++ SDK for Windows x64",
+      "version": "1.3.0",
+      "source": "https://github.com/livekit/client-sdk-cpp/tree/v1.3.0",
+      "artifact_source": "https://github.com/livekit/client-sdk-cpp/releases/tag/v1.3.0",
+      "artifact": "livekit-sdk-windows-x64-1.3.0.zip",
+      "artifact_sha256": "27a8707348d7fb094023b7c8af29e26b8e4085a4dab75d26be3968f29b2269c3",
+      "license": "Apache-2.0",
+      "runtime": true,
+      "transitive_inventory": "pending-review",
+      "binary_redistribution_approved": false
     },
     {
       "name": "LiveKitWebRTC XCFramework wrapper",
