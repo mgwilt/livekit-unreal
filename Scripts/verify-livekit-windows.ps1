@@ -10,6 +10,7 @@ $ErrorActionPreference = "Stop"
 $PluginRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $WindowsRoot = Join-Path $PluginRoot "Source\ThirdParty\Windows"
 $LockPath = Join-Path $WindowsRoot "dependencies.lock"
+. (Join-Path $PSScriptRoot "livekit-windows-sdk-paths.ps1")
 
 function Get-AdapterSourceSet {
     param([Parameter(Mandatory = $true)][string]$Root)
@@ -100,7 +101,10 @@ $ExpectedAdapterExports = @(
     "lkub_shutdown"
 )
 if ([string]::IsNullOrWhiteSpace($SdkRoot)) {
-    $SdkRoot = Join-Path $WindowsRoot "SDK"
+    $SdkRoot = Resolve-LiveKitWindowsSdkRoot -WindowsRoot $WindowsRoot
+}
+else {
+    $SdkRoot = Resolve-LiveKitWindowsSdkRoot -WindowsRoot $WindowsRoot -SdkRoot $SdkRoot
 }
 
 function Read-DependencyLock {
@@ -145,9 +149,38 @@ if (-not (Test-Path -LiteralPath $SdkRoot -PathType Container)) {
 $SdkRoot = (Resolve-Path -LiteralPath $SdkRoot).Path
 $VerificationMarkerPath = Join-Path $SdkRoot ".verified.json"
 $AdapterBuildMarkerPath = Join-Path $SdkRoot ".adapter-build.json"
-# A failed or interrupted verification must never leave a marker that can enable
-# the Win64 backend on a later direct Unreal build.
-Remove-Item -LiteralPath $VerificationMarkerPath -Force -ErrorAction SilentlyContinue
+$ManagedInstallMarkerPath = Join-Path $SdkRoot ".managed-install.json"
+$InstallsRoot = Get-LiveKitWindowsSdkInstallsRoot -WindowsRoot $WindowsRoot
+$SdkParent = [IO.DirectoryInfo]::new($SdkRoot).Parent
+$IsImmutableManagedInstall = $null -ne $SdkParent -and
+    (Test-LiveKitWindowsPathEqual -Left $SdkParent.FullName -Right $InstallsRoot)
+if ($IsImmutableManagedInstall) {
+    $InstallName = [IO.Path]::GetFileName($SdkRoot.TrimEnd('\', '/'))
+    if (-not (Test-LiveKitWindowsManagedSdkInstallName -InstallName $InstallName) -or
+        -not (Test-Path -LiteralPath $ManagedInstallMarkerPath -PathType Leaf)) {
+        throw "The immutable LiveKit Windows SDK is missing valid managed-install provenance."
+    }
+    try {
+        $ManagedInstallMarker = Get-Content -LiteralPath $ManagedInstallMarkerPath -Raw |
+            ConvertFrom-Json
+        $null = [DateTimeOffset]::Parse(
+            [string]$ManagedInstallMarker.createdUtc,
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::RoundtripKind)
+    }
+    catch {
+        throw "The immutable LiveKit Windows SDK managed-install provenance is malformed."
+    }
+    if ([string]$ManagedInstallMarker.schemaVersion -ne "1" -or
+        [string]$ManagedInstallMarker.managedBy -ne "LiveKitBridge" -or
+        [string]$ManagedInstallMarker.installName -cne $InstallName -or
+        [string]$ManagedInstallMarker.installKind -notin @("fetch", "adapter-rebuild")) {
+        throw "The immutable LiveKit Windows SDK managed-install provenance does not match its directory."
+    }
+}
+# The build rule independently re-hashes every marker input and manifest file,
+# so a stale marker cannot enable the backend. Preserve an already-valid marker
+# to keep an active versioned install read-only during repeat verification.
 
 $Lock = Read-DependencyLock -Path $LockPath
 $ExpectedVersion = Require-LockValue -Values $Lock -Name "LIVEKIT_CPP_VERSION"
@@ -318,6 +351,7 @@ $ActualFiles = @(
             $_.FullName -ne $ManifestPath -and
             $_.FullName -ne $SourcePath -and
             $_.FullName -ne $VerificationMarkerPath -and
+            $_.FullName -ne $ManagedInstallMarkerPath -and
             $AdapterGeneratedFiles -notcontains $_.FullName.Substring($SdkRoot.Length + 1).Replace('\', '/')
         } |
         ForEach-Object { $_.FullName.Substring($SdkRoot.Length + 1).Replace('\', '/') } |
@@ -330,25 +364,58 @@ if ($Differences.Count -ne 0) {
     throw "SDK files do not match the verified archive manifest: $Summary"
 }
 
-$MarkerTemporaryPath = Join-Path $SdkRoot (".verified.{0}.tmp" -f [Guid]::NewGuid().ToString("N"))
-try {
-    [ordered]@{
-        version = $ExpectedVersion
-        archiveSha256 = $ExpectedHash
-        lockSha256 = (Get-FileHash -LiteralPath $LockPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        sourceSha256 = (Get-FileHash -LiteralPath $SourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
-        manifestSha256 = (Get-FileHash -LiteralPath $ManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        adapterBuildSha256 = (Get-FileHash -LiteralPath $AdapterBuildMarkerPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        adapterSourceSetSha256 = $CurrentAdapterHashes.adapterSourceSetSha256
-        adapterDllSha256 = $CurrentAdapterHashes.adapterDllSha256
-        adapterLibSha256 = $CurrentAdapterHashes.adapterLibSha256
-        adapterPdbSha256 = $CurrentAdapterHashes.adapterPdbSha256
-        verifiedUtc = [DateTime]::UtcNow.ToString("o")
-    } | ConvertTo-Json | Set-Content -LiteralPath $MarkerTemporaryPath -Encoding UTF8
-    Move-Item -LiteralPath $MarkerTemporaryPath -Destination $VerificationMarkerPath -Force
+$ExpectedMarkerValues = [ordered]@{
+    version = $ExpectedVersion
+    archiveSha256 = $ExpectedHash
+    lockSha256 = (Get-FileHash -LiteralPath $LockPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    sourceSha256 = (Get-FileHash -LiteralPath $SourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    manifestSha256 = (Get-FileHash -LiteralPath $ManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    adapterBuildSha256 = (Get-FileHash -LiteralPath $AdapterBuildMarkerPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    adapterSourceSetSha256 = $CurrentAdapterHashes.adapterSourceSetSha256
+    adapterDllSha256 = $CurrentAdapterHashes.adapterDllSha256
+    adapterLibSha256 = $CurrentAdapterHashes.adapterLibSha256
+    adapterPdbSha256 = $CurrentAdapterHashes.adapterPdbSha256
 }
-finally {
-    Remove-Item -LiteralPath $MarkerTemporaryPath -Force -ErrorAction SilentlyContinue
+if (Test-Path -LiteralPath $ManagedInstallMarkerPath -PathType Leaf) {
+    $ExpectedMarkerValues.managedInstallSha256 =
+        (Get-FileHash -LiteralPath $ManagedInstallMarkerPath -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+$MarkerMatches = $false
+if (Test-Path -LiteralPath $VerificationMarkerPath -PathType Leaf) {
+    try {
+        $ExistingMarker = Get-Content -LiteralPath $VerificationMarkerPath -Raw | ConvertFrom-Json
+        $MarkerMatches = $true
+        foreach ($Name in $ExpectedMarkerValues.Keys) {
+            $Property = $ExistingMarker.PSObject.Properties[$Name]
+            if ($null -eq $Property -or
+                -not [string]::Equals(
+                    [string]$Property.Value,
+                    [string]$ExpectedMarkerValues[$Name],
+                    [StringComparison]::OrdinalIgnoreCase)) {
+                $MarkerMatches = $false
+                break
+            }
+        }
+    }
+    catch {
+        $MarkerMatches = $false
+    }
+}
+
+if (-not $MarkerMatches) {
+    $MarkerTemporaryPath = Join-Path $SdkRoot (".verified.{0}.tmp" -f [Guid]::NewGuid().ToString("N"))
+    try {
+        $Marker = [ordered]@{}
+        foreach ($Name in $ExpectedMarkerValues.Keys) {
+            $Marker[$Name] = $ExpectedMarkerValues[$Name]
+        }
+        $Marker["verifiedUtc"] = [DateTime]::UtcNow.ToString("o")
+        $Marker | ConvertTo-Json | Set-Content -LiteralPath $MarkerTemporaryPath -Encoding UTF8
+        Move-Item -LiteralPath $MarkerTemporaryPath -Destination $VerificationMarkerPath -Force
+    }
+    finally {
+        Remove-Item -LiteralPath $MarkerTemporaryPath -Force -ErrorAction SilentlyContinue
+    }
 }
 
 if (-not $Quiet) {

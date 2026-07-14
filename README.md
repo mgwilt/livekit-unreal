@@ -42,7 +42,7 @@ Windows PowerShell:
 .\Plugins\LiveKitBridge\Scripts\verify-livekit-windows.ps1
 ```
 
-The dependency archives, extracted frameworks, generated headers, libraries, DLLs, and facade static libraries are intentionally excluded from Git. The Windows fetch script verifies the pinned archive checksum, builds the narrow Unreal adapter with the Visual Studio 2022 x64 toolchain, checks its exact C exports, x64 architecture, dynamic CRT, LiveKit dependency, and absence of Unreal binary dependencies, and then atomically replaces `Source/ThirdParty/Windows/SDK`. The separate verifier checks every upstream SDK file and generated adapter artifact before writing the lock- and source-bound marker required to enable the Win64 backend at build time. The marker binds an ordinal-sorted set of every C/C++ file under `Source/WindowsAdapter/include` and `Source/WindowsAdapter/src`, so adding, removing, renaming, or editing any adapter source invalidates stale binaries and automatically selects the SDK-unavailable fallback until the adapter is rebuilt and verified.
+The dependency archives, extracted frameworks, generated headers, libraries, DLLs, and facade static libraries are intentionally excluded from Git. Windows fetch and rebuild operations are serialized by a lock scoped to `Source/ThirdParty/Windows`. The fetch script verifies the pinned archive checksum, builds the narrow Unreal adapter with the Visual Studio 2022 x64 toolchain, checks its exact C exports, x64 architecture, dynamic CRT, LiveKit dependency, and absence of Unreal binary dependencies, and fully verifies a new immutable install under `Source/ThirdParty/Windows/SDKs` before atomically replacing `active-sdk.txt`. A failed or interrupted activation therefore leaves the previous SDK usable. Conservative cleanup keeps the active and previous installs and never removes legacy or unknown workflow directories. Installations created before this layout continue to resolve from `Source/ThirdParty/Windows/SDK` when no active pointer exists. Use `fetch-livekit-windows.ps1 -Force` to repair a malformed pointer or one whose target is missing. The separate verifier checks every upstream SDK file and generated adapter artifact before writing the lock- and source-bound marker required to enable the Win64 backend at build time. The marker binds an ordinal-sorted set of every C/C++ file under `Source/WindowsAdapter/include` and `Source/WindowsAdapter/src`, so adding, removing, renaming, or editing any adapter source invalidates stale binaries and automatically selects the SDK-unavailable fallback until the adapter is rebuilt and verified.
 
 ## Blueprint quick start
 
@@ -105,14 +105,13 @@ $env:UE_ROOT = "<path-to-UE-5.8>"
 .\Scripts\verify-livekit-windows.ps1
 ```
 
-After changing `Source/WindowsAdapter`, rebuild and re-verify the generated adapter without downloading the SDK again:
+After changing `Source/WindowsAdapter`, rebuild the generated adapter without downloading the SDK again. The helper clones the active SDK into a new inactive versioned directory, builds and verifies there, atomically activates it, and only then removes old, recognized managed installs beyond the retained rollback copy:
 
 ```powershell
 .\Scripts\build-livekit-windows-adapter.ps1
-.\Scripts\verify-livekit-windows.ps1
 ```
 
-Pass `-VisualStudioRoot "<path-to-Visual-Studio-2022>"` to either build entry point when automatic Visual Studio discovery is unavailable. The build helper removes the verification marker before touching generated output; Unreal therefore keeps `WITH_LIVEKIT_WINDOWS=0` until verification succeeds.
+Pass `-VisualStudioRoot "<path-to-Visual-Studio-2022>"` to either build entry point when automatic Visual Studio discovery is unavailable. The build helper never modifies the active SDK; Unreal continues using the previous verified install until the rebuilt candidate is verified and activated.
 
 After the Win64 SDK initializes, the plugin keeps the adapter, LiveKit C++, and LiveKit FFI DLLs mapped for the remainder of the process and disables dynamic module reload. The pinned SDK can finish asynchronous FFI cleanup after its synchronous shutdown call returns, so restart the editor or game process after rebuilding the Windows adapter or bridge.
 

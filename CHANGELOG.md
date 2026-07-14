@@ -8,7 +8,7 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- Pinned, checksum-verified LiveKit C++ SDK 1.3.0 dependency bootstrap for Windows x64, with atomic SDK replacement and installed-file verification.
+- Pinned, checksum-verified LiveKit C++ SDK 1.3.0 dependency bootstrap for Windows x64, with immutable versioned installs, atomic active-pointer replacement, and installed-file verification.
 - Visual Studio 2022 build and source-bound verification for the generated Windows ABI adapter, with automatic stale-binary fallback and runtime staging.
 - Process-lifetime Win64 runtime pinning and dynamic-reload rejection so late FFI worker cleanup cannot execute from unloaded DLLs during application exit.
 - Windows SDK provenance and transitive-license review status in the third-party component inventory and notices.

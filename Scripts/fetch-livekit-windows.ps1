@@ -11,9 +11,9 @@ $ProgressPreference = "SilentlyContinue"
 $PluginRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $WindowsRoot = Join-Path $PluginRoot "Source\ThirdParty\Windows"
 $LockPath = Join-Path $WindowsRoot "dependencies.lock"
-$SdkRoot = Join-Path $WindowsRoot "SDK"
 $VerifyScript = Join-Path $PSScriptRoot "verify-livekit-windows.ps1"
 $BuildAdapterScript = Join-Path $PSScriptRoot "build-livekit-windows-adapter.ps1"
+. (Join-Path $PSScriptRoot "livekit-windows-sdk-paths.ps1")
 
 function Read-DependencyLock {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -94,11 +94,22 @@ if ($DownloadUri.Scheme -ne "https" -or [IO.Path]::GetFileName($DownloadUri.Abso
     throw "LIVEKIT_CPP_URL must be HTTPS and end with LIVEKIT_CPP_ARCHIVE"
 }
 
-if (-not $Force -and (Test-Path -LiteralPath $SdkRoot -PathType Container)) {
+$OperationLock = Enter-LiveKitWindowsSdkOperationLock -WindowsRoot $WindowsRoot
+$TransactionRoot = $null
+try {
+$PreviousSdkRoot = Resolve-LiveKitWindowsSdkRootBeforeReplacement `
+    -WindowsRoot $WindowsRoot `
+    -AllowInvalidActivePointer:$Force
+if (-not [string]::IsNullOrWhiteSpace($PreviousSdkRoot) -and
+    -not (Test-Path -LiteralPath $PreviousSdkRoot -PathType Container)) {
+    $PreviousSdkRoot = $null
+}
+
+if (-not $Force -and $null -ne $PreviousSdkRoot) {
     try {
-        & $VerifyScript -SdkRoot $SdkRoot -Quiet
+        & $VerifyScript -SdkRoot $PreviousSdkRoot -Quiet
         Write-Host "LiveKit C++ SDK $Version is already installed and verified."
-        exit 0
+        return
     }
     catch {
         Write-Warning "The existing SDK did not verify and will be replaced: $($_.Exception.Message)"
@@ -111,11 +122,16 @@ $TransactionRoot = Join-Path (Join-Path $WindowsRoot ".extract") $TransactionId
 $DownloadPath = Join-Path $TransactionRoot $ArchiveName
 $ExtractRoot = Join-Path $TransactionRoot "archive"
 $StagedSdk = Join-Path $TransactionRoot "SDK-ready"
-$PreviousSdk = Join-Path $TransactionRoot "SDK-previous"
+$InstallsRoot = Get-LiveKitWindowsSdkInstallsRoot -WindowsRoot $WindowsRoot
+$InstallName = "livekit-{0}-{1}-{2}" -f $Version, $ExpectedHash.Substring(0, 16), $TransactionId
+if ($InstallName -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') {
+    throw "LIVEKIT_CPP_VERSION cannot be represented as a safe immutable SDK install name"
+}
+$InstalledSdk = Join-Path $InstallsRoot $InstallName
+$ActivationSucceeded = $false
 
 New-Item -ItemType Directory -Path $TransactionRoot -Force | Out-Null
 
-try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     $DownloadError = $null
     foreach ($Attempt in 1..3) {
@@ -181,31 +197,51 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($VisualStudioRoot)) {
         $AdapterBuildArguments.VisualStudioRoot = $VisualStudioRoot
     }
+    $AdapterBuildArguments.InternalWorker = $true
     & $BuildAdapterScript @AdapterBuildArguments
+    & $VerifyScript -SdkRoot $StagedSdk -Quiet
 
-    $HadPreviousSdk = Test-Path -LiteralPath $SdkRoot
-    if ($HadPreviousSdk) {
-        Move-Item -LiteralPath $SdkRoot -Destination $PreviousSdk
-    }
-
+    New-Item -ItemType Directory -Path $InstallsRoot -Force | Out-Null
+    Assert-LiveKitWindowsSdkPathIsNotReparsePoint -Path $InstallsRoot
     try {
-        Move-Item -LiteralPath $StagedSdk -Destination $SdkRoot
-        & $VerifyScript -SdkRoot $SdkRoot -Quiet
+        # The install directory is immutable once activated. It is first moved
+        # into a unique, inactive path and verified there; only the tiny pointer
+        # file is replaced during activation.
+        Move-Item -LiteralPath $StagedSdk -Destination $InstalledSdk
+        New-LiveKitWindowsManagedSdkInstallMarker `
+            -WindowsRoot $WindowsRoot `
+            -SdkRoot $InstalledSdk `
+            -InstallKind "fetch"
+        & $VerifyScript -SdkRoot $InstalledSdk -Quiet
+        $null = Set-LiveKitWindowsActiveSdk -WindowsRoot $WindowsRoot -SdkRoot $InstalledSdk
+        $ActivationSucceeded = $true
     }
     catch {
-        if (Test-Path -LiteralPath $SdkRoot) {
-            Remove-Item -LiteralPath $SdkRoot -Recurse -Force
-        }
-        if ($HadPreviousSdk -and (Test-Path -LiteralPath $PreviousSdk)) {
-            Move-Item -LiteralPath $PreviousSdk -Destination $SdkRoot
+        # Until pointer replacement succeeds, the previous pointer and SDK are
+        # untouched. Only the never-active candidate is safe to remove here.
+        if (-not $ActivationSucceeded -and (Test-Path -LiteralPath $InstalledSdk)) {
+            Remove-Item -LiteralPath $InstalledSdk -Recurse -Force -ErrorAction SilentlyContinue
         }
         throw
     }
 
-    Write-Host "LiveKit C++ SDK $Version installed and verified at $SdkRoot"
+    # Cleanup happens strictly after successful activation. Individual cleanup
+    # failures are warnings because the new pointer already names a verified SDK.
+    try {
+        Remove-LiveKitWindowsObsoleteSdkInstalls `
+            -WindowsRoot $WindowsRoot `
+            -ActiveSdkRoot $InstalledSdk `
+            -PreviousActiveSdkRoot $PreviousSdkRoot
+    }
+    catch {
+        Write-Warning "The new SDK is active, but obsolete install cleanup failed: $($_.Exception.Message)"
+    }
+
+    Write-Host "LiveKit C++ SDK $Version installed and verified at $InstalledSdk"
 }
 finally {
-    if (Test-Path -LiteralPath $TransactionRoot) {
+    if ($null -ne $TransactionRoot -and (Test-Path -LiteralPath $TransactionRoot)) {
         Remove-Item -LiteralPath $TransactionRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
+    Exit-LiveKitWindowsSdkOperationLock -Lock $OperationLock
 }

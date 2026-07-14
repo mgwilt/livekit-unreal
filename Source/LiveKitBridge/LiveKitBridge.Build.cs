@@ -47,7 +47,17 @@ public class LiveKitBridge : ModuleRules
             Target.Configuration == UnrealTargetConfiguration.DebugGame ||
             Target.Configuration == UnrealTargetConfiguration.Development;
         string windowsRoot = Path.GetFullPath(Path.Combine(ModuleDirectory, "..", "ThirdParty", "Windows"));
-        string windowsSdkRoot = Path.Combine(windowsRoot, "SDK");
+        string windowsPointerPath = Path.Combine(windowsRoot, "active-sdk.txt");
+        string windowsLockPath = Path.Combine(windowsRoot, "dependencies.lock");
+        string windowsSdkRoot = ResolveWindowsSdkRoot(windowsRoot);
+        bool hasResolvedWindowsSdk = !string.IsNullOrEmpty(windowsSdkRoot);
+        if (!hasResolvedWindowsSdk)
+        {
+            // A present but invalid pointer must not silently select the legacy
+            // SDK. Use a guaranteed-unverified path so the existing fallback
+            // backend is compiled instead.
+            windowsSdkRoot = Path.Combine(windowsRoot, "__invalid_active_sdk__");
+        }
         string windowsInclude = Path.Combine(windowsSdkRoot, "include");
         string windowsLib = Path.Combine(windowsSdkRoot, "lib");
         string windowsBin = Path.Combine(windowsSdkRoot, "bin");
@@ -60,8 +70,45 @@ public class LiveKitBridge : ModuleRules
         string windowsAdapterLib = Path.Combine(windowsLib, "LiveKitUnrealWindowsAdapter.lib");
         string windowsAdapterDll = Path.Combine(windowsBin, "LiveKitUnrealWindowsAdapter.dll");
         string windowsAdapterPdb = Path.Combine(windowsBin, "LiveKitUnrealWindowsAdapter.pdb");
+        if (isWindows)
+        {
+            // Missing external dependencies are intentional: UBT treats them as
+            // invalidating a cached makefile, so a later SDK activation is seen.
+            ExternalDependencies.Add(windowsPointerPath);
+            ExternalDependencies.Add(windowsLockPath);
+            foreach (string provenanceName in new[]
+            {
+                ".source.json",
+                ".files.sha256",
+                ".adapter-build.json",
+                ".managed-install.json",
+                ".verified.json"
+            })
+            {
+                ExternalDependencies.Add(Path.Combine(windowsSdkRoot, provenanceName));
+            }
+            foreach (string sourceDirectoryName in new[] { "include", "src" })
+            {
+                string sourceDirectory = Path.Combine(windowsAdapterRoot, sourceDirectoryName);
+                if (!Directory.Exists(sourceDirectory))
+                {
+                    continue;
+                }
+                foreach (string sourcePath in Directory.GetFiles(
+                    sourceDirectory,
+                    "*",
+                    SearchOption.AllDirectories))
+                {
+                    if (IsAdapterSourceExtension(Path.GetExtension(sourcePath)))
+                    {
+                        ExternalDependencies.Add(sourcePath);
+                    }
+                }
+            }
+        }
         bool hasWindowsSdk = isWindows &&
             isInternalBuild &&
+            hasResolvedWindowsSdk &&
             HasVerifiedWindowsSdk(
                 windowsRoot,
                 windowsSdkRoot,
@@ -70,6 +117,7 @@ public class LiveKitBridge : ModuleRules
                 windowsAdapterDll,
                 windowsAdapterLib,
                 windowsAdapterPdb,
+                File.Exists(windowsPointerPath),
                 windowsLiveKitLib,
                 windowsFfiLib,
                 windowsLiveKitDll,
@@ -170,6 +218,78 @@ public class LiveKitBridge : ModuleRules
         }
     }
 
+    private static string ResolveWindowsSdkRoot(string windowsRoot)
+    {
+        try
+        {
+            string normalizedWindowsRoot = Path.GetFullPath(windowsRoot).TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar);
+            string pointerPath = Path.Combine(normalizedWindowsRoot, "active-sdk.txt");
+            if (!File.Exists(pointerPath))
+            {
+                // Compatibility for SDKs fetched before immutable install
+                // directories and the active pointer were introduced.
+                string legacySdkRoot = Path.Combine(normalizedWindowsRoot, "SDK");
+                return Directory.Exists(legacySdkRoot) && IsReparsePoint(legacySdkRoot)
+                    ? string.Empty
+                    : legacySdkRoot;
+            }
+
+            string rawPointerValue = File.ReadAllText(pointerPath);
+            string pointerValue = rawPointerValue.Trim();
+            if (string.IsNullOrWhiteSpace(pointerValue) ||
+                !string.Equals(rawPointerValue, pointerValue, StringComparison.Ordinal) ||
+                Path.IsPathRooted(pointerValue) ||
+                pointerValue.EndsWith(".", StringComparison.Ordinal) ||
+                !Regex.IsMatch(
+                    pointerValue,
+                    @"\ASDKs/[A-Za-z0-9][A-Za-z0-9._-]*\z",
+                    RegexOptions.CultureInvariant | RegexOptions.IgnoreCase))
+            {
+                return string.Empty;
+            }
+
+            foreach (string segment in pointerValue.Split(new[] { '/', '\\' }))
+            {
+                if (segment == "..")
+                {
+                    return string.Empty;
+                }
+            }
+
+            string installsRoot = Path.GetFullPath(Path.Combine(normalizedWindowsRoot, "SDKs"));
+            string sdkRoot = Path.GetFullPath(Path.Combine(
+                normalizedWindowsRoot,
+                pointerValue.Replace('/', Path.DirectorySeparatorChar)));
+            string installsPrefix = installsRoot.TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            if (!sdkRoot.StartsWith(installsPrefix, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(
+                    Path.GetDirectoryName(sdkRoot),
+                    installsRoot,
+                    StringComparison.OrdinalIgnoreCase) ||
+                !Directory.Exists(sdkRoot) ||
+                IsReparsePoint(installsRoot) ||
+                IsReparsePoint(sdkRoot))
+            {
+                return string.Empty;
+            }
+
+            return sdkRoot;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static bool IsReparsePoint(string path)
+    {
+        return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+    }
+
     private static bool HasVerifiedWindowsSdk(
         string windowsRoot,
         string sdkRoot,
@@ -178,6 +298,7 @@ public class LiveKitBridge : ModuleRules
         string adapterDll,
         string adapterLib,
         string adapterPdb,
+        bool requiresManagedInstall,
         params string[] requiredFiles)
     {
         const string pinnedVersion = "1.3.0";
@@ -188,6 +309,7 @@ public class LiveKitBridge : ModuleRules
         string sourcePath = Path.Combine(sdkRoot, ".source.json");
         string manifestPath = Path.Combine(sdkRoot, ".files.sha256");
         string adapterBuildPath = Path.Combine(sdkRoot, ".adapter-build.json");
+        string managedInstallPath = Path.Combine(sdkRoot, ".managed-install.json");
         string markerPath = Path.Combine(sdkRoot, ".verified.json");
         string liveKitHeader = Path.Combine(includeRoot, "livekit", "livekit.h");
         if (!File.Exists(lockPath) ||
@@ -203,6 +325,31 @@ public class LiveKitBridge : ModuleRules
             !File.Exists(adapterPdb))
         {
             return false;
+        }
+
+        bool hasManagedInstall = File.Exists(managedInstallPath);
+        if (requiresManagedInstall && !hasManagedInstall)
+        {
+            return false;
+        }
+        if (hasManagedInstall)
+        {
+            string managedInstallText = File.ReadAllText(managedInstallPath);
+            string installKind = ReadJsonString(managedInstallText, "installKind");
+            DateTimeOffset createdUtc;
+            if (ReadJsonString(managedInstallText, "schemaVersion") != "1" ||
+                ReadJsonString(managedInstallText, "managedBy") != "livekitbridge" ||
+                ReadJsonString(managedInstallText, "installName") !=
+                    Path.GetFileName(sdkRoot).ToLowerInvariant() ||
+                (installKind != "fetch" && installKind != "adapter-rebuild") ||
+                !DateTimeOffset.TryParse(
+                    ReadJsonString(managedInstallText, "createdUtc"),
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind,
+                    out createdUtc))
+            {
+                return false;
+            }
         }
         foreach (string requiredFile in requiredFiles)
         {
@@ -238,6 +385,8 @@ public class LiveKitBridge : ModuleRules
             ReadJsonString(markerText, "adapterDllSha256") == HashFile(adapterDll) &&
             ReadJsonString(markerText, "adapterLibSha256") == HashFile(adapterLib) &&
             ReadJsonString(markerText, "adapterPdbSha256") == HashFile(adapterPdb) &&
+            (!hasManagedInstall ||
+                ReadJsonString(markerText, "managedInstallSha256") == HashFile(managedInstallPath)) &&
             VerifyManifestFiles(sdkRoot, manifestPath);
     }
 

@@ -26,6 +26,11 @@
 
 # Downloaded Windows C++ SDK and generated ABI adapter output (sources and the lock remain tracked)
 /Source/ThirdParty/Windows/SDK/
+/Source/ThirdParty/Windows/SDKs/
+/Source/ThirdParty/Windows/active-sdk.txt
+/Source/ThirdParty/Windows/active-sdk.txt.*.tmp
+/Source/ThirdParty/Windows/active-sdk.txt.*.bak
+/Source/ThirdParty/Windows/.sdk-operation.lock
 /Source/ThirdParty/Windows/*.download
 /Source/ThirdParty/Windows/.extract/
 

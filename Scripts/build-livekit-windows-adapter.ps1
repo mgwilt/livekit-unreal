@@ -1,16 +1,105 @@
 [CmdletBinding()]
 param(
     [string]$SdkRoot,
-    [string]$VisualStudioRoot
+    [string]$VisualStudioRoot,
+    [Parameter(DontShow = $true)][switch]$InternalWorker
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $PluginRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-if ([string]::IsNullOrWhiteSpace($SdkRoot)) {
-    $SdkRoot = Join-Path $PluginRoot "Source\ThirdParty\Windows\SDK"
+$WindowsRoot = Join-Path $PluginRoot "Source\ThirdParty\Windows"
+. (Join-Path $PSScriptRoot "livekit-windows-sdk-paths.ps1")
+
+$OperationLock = $null
+if ($InternalWorker -and [string]::IsNullOrWhiteSpace($SdkRoot)) {
+    throw "The internal adapter build worker requires an explicit inactive SDK root."
 }
+if (-not $InternalWorker) {
+    $OperationLock = Enter-LiveKitWindowsSdkOperationLock -WindowsRoot $WindowsRoot
+}
+
+try {
+if ([string]::IsNullOrWhiteSpace($SdkRoot)) {
+    # A developer rebuild must not mutate the active immutable install. Clone
+    # it to a unique inactive directory, build and verify there, then atomically
+    # activate it through the same pointer used by the fetch workflow.
+    $CurrentSdkRoot = Resolve-LiveKitWindowsSdkRoot -WindowsRoot $WindowsRoot
+    if (-not (Test-Path -LiteralPath $CurrentSdkRoot -PathType Container)) {
+        throw "LiveKit Windows SDK is not installed at $CurrentSdkRoot. Run Scripts/fetch-livekit-windows.ps1 first."
+    }
+
+    $SourceMarkerPath = Join-Path $CurrentSdkRoot ".source.json"
+    if (-not (Test-Path -LiteralPath $SourceMarkerPath -PathType Leaf)) {
+        throw "The active LiveKit Windows SDK provenance marker is missing: .source.json"
+    }
+    $SourceMarker = Get-Content -LiteralPath $SourceMarkerPath -Raw | ConvertFrom-Json
+    $SourceVersion = [string]$SourceMarker.version
+    $SourceHash = ([string]$SourceMarker.sha256).ToLowerInvariant()
+    if ($SourceVersion -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$' -or
+        $SourceVersion.EndsWith('.', [StringComparison]::Ordinal) -or
+        $SourceHash -notmatch '^[a-f0-9]{64}$') {
+        throw "The active LiveKit Windows SDK provenance cannot name a safe immutable install."
+    }
+
+    $InstallsRoot = Get-LiveKitWindowsSdkInstallsRoot -WindowsRoot $WindowsRoot
+    New-Item -ItemType Directory -Path $InstallsRoot -Force | Out-Null
+    Assert-LiveKitWindowsSdkPathIsNotReparsePoint -Path $InstallsRoot
+    $InstallName = "livekit-{0}-{1}-adapter-{2}" -f `
+        $SourceVersion, `
+        $SourceHash.Substring(0, 16), `
+        [Guid]::NewGuid().ToString("N")
+    $CandidateSdkRoot = Join-Path $InstallsRoot $InstallName
+    $ActivationSucceeded = $false
+    try {
+        Copy-Item -LiteralPath $CurrentSdkRoot -Destination $CandidateSdkRoot -Recurse
+
+        $BuildArguments = @{ SdkRoot = $CandidateSdkRoot }
+        if (-not [string]::IsNullOrWhiteSpace($VisualStudioRoot)) {
+            $BuildArguments.VisualStudioRoot = $VisualStudioRoot
+        }
+        $BuildArguments.InternalWorker = $true
+        & $PSCommandPath @BuildArguments
+        New-LiveKitWindowsManagedSdkInstallMarker `
+            -WindowsRoot $WindowsRoot `
+            -SdkRoot $CandidateSdkRoot `
+            -InstallKind "adapter-rebuild"
+        & (Join-Path $PSScriptRoot "verify-livekit-windows.ps1") `
+            -SdkRoot $CandidateSdkRoot `
+            -Quiet
+        $null = Set-LiveKitWindowsActiveSdk `
+            -WindowsRoot $WindowsRoot `
+            -SdkRoot $CandidateSdkRoot
+        $ActivationSucceeded = $true
+    }
+    finally {
+        if (-not $ActivationSucceeded -and (Test-Path -LiteralPath $CandidateSdkRoot)) {
+            Remove-Item -LiteralPath $CandidateSdkRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    try {
+        Remove-LiveKitWindowsObsoleteSdkInstalls `
+            -WindowsRoot $WindowsRoot `
+            -ActiveSdkRoot $CandidateSdkRoot `
+            -PreviousActiveSdkRoot $CurrentSdkRoot
+    }
+    catch {
+        Write-Warning "The rebuilt SDK is active, but obsolete install cleanup failed: $($_.Exception.Message)"
+    }
+    Write-Host "Built, verified, and activated the LiveKit Windows adapter at $CandidateSdkRoot"
+    return
+}
+$RequestedSdkRoot = [IO.Path]::GetFullPath($SdkRoot)
+if (-not $InternalWorker) {
+    $ActiveSdkRoot = Resolve-LiveKitWindowsSdkRootBeforeReplacement -WindowsRoot $WindowsRoot
+    if ((Test-Path -LiteralPath $ActiveSdkRoot -PathType Container) -and
+        (Test-LiveKitWindowsPathEqual -Left $RequestedSdkRoot -Right $ActiveSdkRoot)) {
+        throw "Refusing to rebuild the active immutable SDK in place. Omit -SdkRoot to clone, verify, and atomically activate a rebuilt install."
+    }
+}
+$SdkRoot = Resolve-LiveKitWindowsSdkRoot -WindowsRoot $WindowsRoot -SdkRoot $SdkRoot
 if (-not (Test-Path -LiteralPath $SdkRoot -PathType Container)) {
     throw "LiveKit Windows SDK is not installed at $SdkRoot. Run Scripts/fetch-livekit-windows.ps1 first."
 }
@@ -374,4 +463,8 @@ finally {
         @(Get-ChildItem -LiteralPath $BuildRoot -Force).Count -eq 0) {
         Remove-Item -LiteralPath $BuildRoot -Force -ErrorAction SilentlyContinue
     }
+}
+}
+finally {
+    Exit-LiveKitWindowsSdkOperationLock -Lock $OperationLock
 }
