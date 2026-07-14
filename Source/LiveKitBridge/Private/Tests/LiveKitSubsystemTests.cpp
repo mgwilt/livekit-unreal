@@ -19,6 +19,8 @@ bool FLiveKitConnectionValidationTest::RunTest(const FString& Parameters)
     ULiveKitSubsystem* Subsystem = NewObject<ULiveKitSubsystem>(GameInstance);
 
     FLiveKitConnectOptions Options;
+    TestTrue(TEXT("Microphone defaults enabled"), Options.bEnableMicrophone);
+    TestTrue(TEXT("Apple voice processing defaults enabled"), Options.bEnableVoiceProcessing);
     AddExpectedError(
         TEXT("invalid_connection_details"),
         EAutomationExpectedErrorFlags::Contains,

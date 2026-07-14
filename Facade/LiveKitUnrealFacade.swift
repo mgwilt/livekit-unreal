@@ -138,6 +138,10 @@ public final class LiveKitUnrealSwiftFacade: NSObject, @unchecked Sendable {
         super.init()
     }
 
+    public func setVoiceProcessingEnabled(_ enabled: Bool) throws {
+        try AudioManager.shared.setVoiceProcessingEnabled(enabled)
+    }
+
     public func registerRpcMethod(
         _ method: String,
         invocationHandler: @escaping InvocationHandler,

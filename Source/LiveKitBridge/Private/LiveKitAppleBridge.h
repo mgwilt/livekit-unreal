@@ -41,7 +41,11 @@ public:
     void Shutdown();
 
     bool IsSdkAvailable() const;
-    void Connect(const FString& ServerUrl, const FString& Token, bool bEnableMicrophone);
+    void Connect(
+        const FString& ServerUrl,
+        const FString& Token,
+        bool bEnableMicrophone,
+        bool bEnableVoiceProcessing);
     void Disconnect();
     void SetMicrophoneEnabled(bool bEnabled);
     void PublishData(

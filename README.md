@@ -43,6 +43,8 @@ The dependency archives, extracted frameworks, generated Objective-C headers, an
 
 Transient network failures enter `Reconnecting` and retain the same LiveKit room. An explicit disconnect enters `Disconnecting` and ends that connection.
 
+`LiveKitConnectOptions` enables Apple's voice-processing I/O by default for echo cancellation and automatic gain control. A host that provides its own processing, or a macOS runtime that cannot safely initialize the system voice processor, can disable `Enable Voice Processing` before connecting without disabling microphone publication. LiveKit's audio manager is process-global, so all concurrent rooms in one process must use the same setting; the most recent connection option is applied before that room connects.
+
 ### RPC
 
 Register an incoming method with `Register Rpc Method`, handle `On Rpc Invocation`, and finish each request with `Complete Rpc Invocation` or `Fail Rpc Invocation`. Incoming Blueprint requests expire if they are not completed in time.

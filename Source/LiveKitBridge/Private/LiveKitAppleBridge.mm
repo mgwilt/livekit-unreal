@@ -353,10 +353,23 @@ bool FLiveKitAppleBridge::IsSdkAvailable() const
 #endif
 }
 
-void FLiveKitAppleBridge::Connect(const FString& ServerUrl, const FString& Token, bool bEnableMicrophone)
+void FLiveKitAppleBridge::Connect(
+    const FString& ServerUrl,
+    const FString& Token,
+    bool bEnableMicrophone,
+    bool bEnableVoiceProcessing)
 {
 #if WITH_LIVEKIT_APPLE
     NotifyState(ELiveKitConnectionState::Connecting);
+    NSError* VoiceProcessingError = nil;
+    if (![Implementation->SwiftFacade
+            setVoiceProcessingEnabled:bEnableVoiceProcessing
+            error:&VoiceProcessingError])
+    {
+        NotifyError(MakeLiveKitError(TEXT("audio_configuration_failed"), VoiceProcessingError));
+        NotifyState(ELiveKitConnectionState::Failed);
+        return;
+    }
     FWeakLiveKitBridge WeakBridge = AsShared();
     [Implementation->RoomInstance
         connectWithUrl:ToNSString(ServerUrl)

@@ -200,7 +200,11 @@ void ULiveKitSubsystem::Connect(
     }
 
     bMicrophoneEnabled = Options.bEnableMicrophone;
-    Bridge->Connect(ServerUrl, ParticipantToken, bMicrophoneEnabled);
+    Bridge->Connect(
+        ServerUrl,
+        ParticipantToken,
+        bMicrophoneEnabled,
+        Options.bEnableVoiceProcessing);
 }
 
 void ULiveKitSubsystem::Disconnect()

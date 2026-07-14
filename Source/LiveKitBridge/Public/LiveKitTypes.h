@@ -34,6 +34,15 @@ struct LIVEKITBRIDGE_API FLiveKitConnectOptions
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="LiveKit")
     bool bEnableMicrophone = true;
+
+    /**
+     * Enable Apple's voice-processing I/O for echo cancellation and gain control.
+     * Disable this before connecting when the host supplies its own processing or
+     * cannot safely initialize the platform voice processor. LiveKit applies this
+     * process-wide, so concurrent rooms must use the same value.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="LiveKit|Audio")
+    bool bEnableVoiceProcessing = true;
 };
 
 USTRUCT(BlueprintType)
