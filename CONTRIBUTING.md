@@ -11,7 +11,7 @@ Thanks for helping improve LiveKit for Unreal. This repository is a community pr
 Set the engine location when needed, then bootstrap the exact dependencies:
 
 ```sh
-export UE_ROOT="/Users/Shared/Epic Games/UE_5.8"
+export UE_ROOT="<path-to-UE-5.8>"
 ./Scripts/fetch-livekit-apple.sh
 ./Scripts/verify-livekit-apple.sh
 ```

@@ -88,10 +88,10 @@ The plugin does not choose a bundle identifier, signing team, orientation, token
 
 ## Development
 
-Set `UE_ROOT` when Unreal is not installed at `/Users/Shared/Epic Games/UE_5.8`.
+Set `UE_ROOT` to the Unreal Engine 5.8 installation directory.
 
 ```sh
-export UE_ROOT="/Users/Shared/Epic Games/UE_5.8"
+export UE_ROOT="<path-to-UE-5.8>"
 ./Scripts/fetch-livekit-apple.sh
 ./Scripts/test-plugin.sh
 ./Scripts/verify-release-compliance.sh source
@@ -100,7 +100,7 @@ export UE_ROOT="/Users/Shared/Epic Games/UE_5.8"
 On Windows, run the dependency verification from PowerShell before building:
 
 ```powershell
-$env:UE_ROOT = "D:\unreal\engines\UE_5.8"
+$env:UE_ROOT = "<path-to-UE-5.8>"
 .\Scripts\fetch-livekit-windows.ps1
 .\Scripts\verify-livekit-windows.ps1
 ```
