@@ -169,6 +169,10 @@ public:
 #endif
 
 private:
+#if WITH_DEV_AUTOMATION_TESTS
+    friend class FLiveKitSubsystemTestAccess;
+#endif
+
     void SetConnectionState(ELiveKitConnectionState NewState);
     void ReportError(const FLiveKitError& Error);
     void HandleParticipantConnected(const FLiveKitParticipantInfo& Participant);

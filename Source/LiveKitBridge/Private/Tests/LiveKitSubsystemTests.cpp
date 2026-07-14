@@ -7,6 +7,7 @@
 #include "HAL/FileManager.h"
 #include "HAL/PlatformProcess.h"
 #include "LiveKitBridgeModule.h"
+#include "LiveKitPlatformBridge.h"
 #include "LiveKitPlatformBridgeFactory.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/Paths.h"
@@ -14,6 +15,56 @@
 #include "UObject/UnrealType.h"
 
 #include <atomic>
+
+class FLiveKitSubsystemTestAccess
+{
+public:
+    static void SetBridge(
+        ULiveKitSubsystem& Subsystem,
+        const TSharedPtr<ILiveKitPlatformBridge>& Bridge)
+    {
+        Subsystem.Bridge = Bridge;
+    }
+};
+
+class FRecordingLiveKitPlatformBridge final : public ILiveKitPlatformBridge
+{
+public:
+    virtual void Shutdown() override {}
+    virtual bool IsSdkAvailable() const override { return true; }
+    virtual FString GetBackendName() const override { return TEXT("Test"); }
+    virtual void Connect(const FString&, const FString&, bool, bool) override {}
+    virtual void Disconnect() override {}
+    virtual void SetMicrophoneEnabled(bool bEnabled) override
+    {
+        MicrophoneStates.Add(bEnabled);
+    }
+    virtual void PublishData(
+        const FString&,
+        const TArray<uint8>&,
+        const FString&,
+        ELiveKitDataReliability,
+        const TArray<FString>&) override {}
+    virtual bool RegisterByteStreamHandler(const FString&) override { return true; }
+    virtual void UnregisterByteStreamHandler(const FString&) override {}
+    virtual bool RegisterRpcMethod(const FString&) override { return true; }
+    virtual void UnregisterRpcMethod(const FString&) override {}
+    virtual void PerformRpc(
+        const FString&,
+        const FString&,
+        const FString&,
+        const FString&,
+        float,
+        float) override {}
+    virtual void CompleteRpcInvocation(const FString&, const FString&) override {}
+    virtual void FailRpcInvocation(
+        const FString&,
+        int32,
+        const FString&,
+        const FString&) override {}
+
+    TArray<bool> MicrophoneStates;
+};
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     FLiveKitWindowsDependencyDiscoveryTest,
@@ -207,6 +258,84 @@ bool FLiveKitStateTransitionTest::RunTest(const FString& Parameters)
     Subsystem->SetConnectionStateForTesting(ELiveKitConnectionState::Disconnected);
     TestEqual(TEXT("Disconnected"), Subsystem->GetConnectionState(), ELiveKitConnectionState::Disconnected);
 
+    GameInstance->RemoveFromRoot();
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+    FLiveKitMicrophoneReconnectStateTest,
+    "LiveKitBridge.Audio.MicrophoneReconnectState",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FLiveKitMicrophoneReconnectStateTest::RunTest(const FString& Parameters)
+{
+    UGameInstance* GameInstance = NewObject<UGameInstance>();
+    GameInstance->AddToRoot();
+    ULiveKitSubsystem* Subsystem = NewObject<ULiveKitSubsystem>(GameInstance);
+    const TSharedPtr<FRecordingLiveKitPlatformBridge> RecordingBridge =
+        MakeShared<FRecordingLiveKitPlatformBridge>();
+    FLiveKitSubsystemTestAccess::SetBridge(*Subsystem, RecordingBridge);
+
+    Subsystem->SetMicrophoneEnabled(false);
+    TestFalse(TEXT("Disconnected microphone preference is retained"), Subsystem->IsMicrophoneEnabled());
+    TestEqual(
+        TEXT("Disconnected microphone changes do not touch the bridge"),
+        RecordingBridge->MicrophoneStates.Num(),
+        0);
+
+    Subsystem->SetConnectionStateForTesting(ELiveKitConnectionState::Connecting);
+    Subsystem->SetConnectionStateForTesting(ELiveKitConnectionState::Connected);
+    TestEqual(
+        TEXT("Initial connection does not publish the microphone twice"),
+        RecordingBridge->MicrophoneStates.Num(),
+        0);
+
+    Subsystem->SetMicrophoneEnabled(true);
+    TestEqual(
+        TEXT("Connected microphone changes reach the bridge immediately"),
+        RecordingBridge->MicrophoneStates.Num(),
+        1);
+    if (RecordingBridge->MicrophoneStates.Num() == 1)
+    {
+        TestTrue(TEXT("The immediate microphone state is enabled"), RecordingBridge->MicrophoneStates[0]);
+    }
+
+    Subsystem->SetConnectionStateForTesting(ELiveKitConnectionState::Reconnecting);
+    Subsystem->SetMicrophoneEnabled(false);
+    TestFalse(TEXT("Reconnect retains the latest microphone preference"), Subsystem->IsMicrophoneEnabled());
+    TestEqual(
+        TEXT("Microphone changes wait while reconnecting"),
+        RecordingBridge->MicrophoneStates.Num(),
+        1);
+
+    Subsystem->SetConnectionStateForTesting(ELiveKitConnectionState::Connected);
+    TestEqual(
+        TEXT("Reconnect recovery reapplies the microphone preference once"),
+        RecordingBridge->MicrophoneStates.Num(),
+        2);
+    if (RecordingBridge->MicrophoneStates.Num() == 2)
+    {
+        TestFalse(TEXT("The recovered microphone state is muted"), RecordingBridge->MicrophoneStates[1]);
+    }
+
+    Subsystem->SetConnectionStateForTesting(ELiveKitConnectionState::Connected);
+    TestEqual(
+        TEXT("Duplicate connected notifications do not reapply microphone state"),
+        RecordingBridge->MicrophoneStates.Num(),
+        2);
+
+    Subsystem->SetConnectionStateForTesting(ELiveKitConnectionState::Reconnecting);
+    Subsystem->SetConnectionStateForTesting(ELiveKitConnectionState::Connected);
+    TestEqual(
+        TEXT("Each completed transient reconnect reapplies the current preference once"),
+        RecordingBridge->MicrophoneStates.Num(),
+        3);
+    if (RecordingBridge->MicrophoneStates.Num() == 3)
+    {
+        TestFalse(TEXT("An unchanged muted preference remains muted"), RecordingBridge->MicrophoneStates[2]);
+    }
+
+    FLiveKitSubsystemTestAccess::SetBridge(*Subsystem, TSharedPtr<ILiveKitPlatformBridge>());
     GameInstance->RemoveFromRoot();
     return true;
 }

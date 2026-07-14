@@ -422,7 +422,19 @@ void ULiveKitSubsystem::SetConnectionState(ELiveKitConnectionState NewState)
         return;
     }
 
+    const ELiveKitConnectionState PreviousState = ConnectionState;
     ConnectionState = NewState;
+    if (PreviousState == ELiveKitConnectionState::Reconnecting &&
+        NewState == ELiveKitConnectionState::Connected &&
+        Bridge)
+    {
+        // A caller may change the desired microphone state while the SDK is
+        // reconnecting, when SetMicrophoneEnabled deliberately avoids touching
+        // the room. Reapply it before announcing recovery. Restricting this to
+        // Reconnecting -> Connected also avoids a second publication during the
+        // initial Connecting -> Connected transition.
+        Bridge->SetMicrophoneEnabled(bMicrophoneEnabled);
+    }
     if (NewState == ELiveKitConnectionState::Disconnected)
     {
         RemoteParticipants.Reset();
