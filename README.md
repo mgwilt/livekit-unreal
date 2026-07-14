@@ -1,29 +1,33 @@
 # LiveKit for Unreal (Community)
 
-Blueprint-ready LiveKit rooms, audio, data, and RPC for Unreal Engine 5.8 on macOS and iOS.
+Blueprint-ready LiveKit rooms, audio, data, and RPC for Unreal Engine 5.8 on macOS, iOS, and Windows x64.
 
 This is a community-maintained integration. It is not an official LiveKit SDK and is not affiliated with or endorsed by LiveKit, Inc.
 
 ## Status
 
-Version `0.2.0` targets:
+The current source targets:
 
 - Unreal Engine 5.8
 - macOS Editor and game builds
 - Physical iOS devices with a minimum deployment target of iOS 15
-- LiveKit Swift SDK 2.15.1
+- Windows x64 Editor and game builds
+- LiveKit Swift SDK 2.15.1 on Apple platforms
+- LiveKit C++ SDK 1.3.0 on Windows
 - Microphone publishing and subscribed room audio
 - Participant, speaking-state, reliable/lossy data, incoming byte-stream, and RPC Blueprint APIs
 
-Video, screen sharing, Android, Windows, tvOS, visionOS, and a production token service are outside the 0.2 release.
+Video, screen sharing, Android, tvOS, visionOS, and a production token service are outside the current source scope.
 
 ## Prebuilt release status
 
-Prebuilt binaries are not published for 0.2.0. The pinned RustLiveKitUniFFI release does not provide enough provenance to generate a complete transitive binary license inventory. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the enforced release gate.
+Prebuilt binaries are not published. The pinned RustLiveKitUniFFI Apple release and LiveKit C++ Windows release have not supplied a complete, reviewed transitive binary license inventory for this project. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the enforced release gate.
 
 ## Install from source
 
-Clone this repository directly into the project's plugin directory, then fetch and verify the pinned Apple dependencies:
+Clone this repository directly into the project's plugin directory, then fetch and verify the dependencies for the host platform.
+
+Apple:
 
 ```sh
 git clone https://github.com/mgwilt/livekit-unreal.git Plugins/LiveKitBridge
@@ -31,14 +35,21 @@ git clone https://github.com/mgwilt/livekit-unreal.git Plugins/LiveKitBridge
 ./Plugins/LiveKitBridge/Scripts/verify-livekit-apple.sh
 ```
 
-The dependency archives, extracted frameworks, generated Objective-C headers, and facade static libraries are intentionally excluded from Git.
+Windows PowerShell:
+
+```powershell
+.\Plugins\LiveKitBridge\Scripts\fetch-livekit-windows.ps1
+.\Plugins\LiveKitBridge\Scripts\verify-livekit-windows.ps1
+```
+
+The dependency archives, extracted frameworks, generated headers, libraries, DLLs, and facade static libraries are intentionally excluded from Git. Windows fetch and rebuild operations are serialized by a lock scoped to `Source/ThirdParty/Windows`. The fetch script verifies the pinned archive checksum, builds the narrow Unreal adapter with the Visual Studio 2022 x64 toolchain, checks its exact C exports, x64 architecture, dynamic CRT, LiveKit dependency, and absence of Unreal binary dependencies, and fully verifies a new immutable install under `Source/ThirdParty/Windows/SDKs` before atomically replacing `active-sdk.txt`. A failed or interrupted activation therefore leaves the previous SDK usable. Conservative cleanup keeps the active and previous installs and never removes legacy or unknown workflow directories. Installations created before this layout continue to resolve from `Source/ThirdParty/Windows/SDK` when no active pointer exists. Use `fetch-livekit-windows.ps1 -Force` to repair a malformed pointer or one whose target is missing. The separate verifier checks every upstream SDK file and generated adapter artifact before writing the lock- and source-bound marker required to enable the Win64 backend at build time. The marker binds an ordinal-sorted set of every C/C++ file under `Source/WindowsAdapter/include` and `Source/WindowsAdapter/src`, so adding, removing, renaming, or editing any adapter source invalidates stale binaries and automatically selects the SDK-unavailable fallback until the adapter is rebuilt and verified.
 
 ## Blueprint quick start
 
 1. Obtain a LiveKit server URL and participant token from your application backend. Never put an API secret in an Unreal client.
 2. Use **Connect to LiveKit**, or get the `LiveKitSubsystem` game-instance subsystem and call `Connect` with the URL, token, and `LiveKitConnectOptions`.
 3. Bind to `On Connection State Changed`, `On Error`, participant, speaking, data, and RPC events as needed.
-4. Use `Set Microphone Enabled` to control local microphone publication. Subscribed room audio is managed by LiveKit's Apple audio session.
+4. Use `Set Microphone Enabled` to control local microphone publication. Subscribed room audio is managed by the selected platform SDK.
 5. Use **Disconnect from LiveKit** to wait for a confirmed SDK disconnect before treating the room connection as ended.
 
 Transient network failures enter `Reconnecting` and retain the same LiveKit room. An explicit disconnect enters `Disconnecting` and ends that connection.
@@ -51,7 +62,7 @@ Register an incoming method with `Register Rpc Method`, handle `On Rpc Invocatio
 
 Use **Perform LiveKit RPC** for an asynchronous outbound call. The default response timeout is 15 seconds and the default maximum round-trip latency is 7 seconds.
 
-LiveKit Swift 2.15.1 cannot construct a custom public `RpcError` for an incoming failure. In 0.1, an incoming Blueprint failure is reported to the caller as LiveKit's application error rather than a custom wire-level error code.
+On Apple platforms, LiveKit Swift 2.15.1 cannot construct a custom public `RpcError` for an incoming failure. An incoming Blueprint failure is therefore reported to the caller as LiveKit's application error rather than a custom wire-level error code.
 
 ### Data
 
@@ -77,14 +88,32 @@ The plugin does not choose a bundle identifier, signing team, orientation, token
 
 ## Development
 
-Set `UE_ROOT` when Unreal is not installed at `/Users/Shared/Epic Games/UE_5.8`.
+Set `UE_ROOT` to the Unreal Engine 5.8 installation directory.
 
 ```sh
-export UE_ROOT="/Users/Shared/Epic Games/UE_5.8"
+export UE_ROOT="<path-to-UE-5.8>"
 ./Scripts/fetch-livekit-apple.sh
 ./Scripts/test-plugin.sh
 ./Scripts/verify-release-compliance.sh source
 ```
+
+On Windows, Visual Studio 2022 with the Desktop development with C++ workload is required. Run the dependency verification from PowerShell before building:
+
+```powershell
+$env:UE_ROOT = "<path-to-UE-5.8>"
+.\Scripts\fetch-livekit-windows.ps1
+.\Scripts\verify-livekit-windows.ps1
+```
+
+After changing `Source/WindowsAdapter`, rebuild the generated adapter without downloading the SDK again. The helper clones the active SDK into a new inactive versioned directory, builds and verifies there, atomically activates it, and only then removes old, recognized managed installs beyond the retained rollback copy:
+
+```powershell
+.\Scripts\build-livekit-windows-adapter.ps1
+```
+
+Pass `-VisualStudioRoot "<path-to-Visual-Studio-2022>"` to either build entry point when automatic Visual Studio discovery is unavailable. The build helper never modifies the active SDK; Unreal continues using the previous verified install until the rebuilt candidate is verified and activated.
+
+After the Win64 SDK initializes, the plugin keeps the adapter, LiveKit C++, and LiveKit FFI DLLs mapped for the remainder of the process and disables dynamic module reload. The pinned SDK can finish asynchronous FFI cleanup after its synchronous shutdown call returns, so restart the editor or game process after rebuilding the Windows adapter or bridge.
 
 `test-plugin.sh` packages the plugin and loads it in the repository's Blueprint-only smoke project before running the `LiveKitBridge.*` Unreal automation tests.
 

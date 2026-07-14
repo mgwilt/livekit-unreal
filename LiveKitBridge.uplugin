@@ -1,9 +1,9 @@
 {
   "FileVersion": 3,
-  "Version": 2,
-  "VersionName": "0.2.0",
+  "Version": 3,
+  "VersionName": "0.3.0",
   "FriendlyName": "LiveKit for Unreal (Community)",
-  "Description": "Blueprint-ready LiveKit rooms, audio, data, byte streams, and RPC for Unreal Engine on Apple platforms.",
+  "Description": "Blueprint-ready LiveKit rooms, audio, data, byte streams, and RPC for Unreal Engine on Apple and Windows platforms.",
   "Category": "Online",
   "CreatedBy": "mgwilt",
   "CreatedByURL": "https://github.com/mgwilt",
@@ -13,13 +13,13 @@
   "EnabledByDefault": false,
   "CanContainContent": false,
   "Installed": false,
-  "SupportedTargetPlatforms": ["Mac", "IOS"],
+  "SupportedTargetPlatforms": ["Mac", "IOS", "Win64"],
   "Modules": [
     {
       "Name": "LiveKitBridge",
       "Type": "Runtime",
       "LoadingPhase": "Default",
-      "PlatformAllowList": ["Mac", "IOS"]
+      "PlatformAllowList": ["Mac", "IOS", "Win64"]
     }
   ]
 }

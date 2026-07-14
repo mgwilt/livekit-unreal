@@ -1,7 +1,7 @@
 #include "LiveKitSubsystem.h"
 
 #include "Async/Async.h"
-#include "LiveKitAppleBridge.h"
+#include "LiveKitPlatformBridgeFactory.h"
 #include "Misc/Guid.h"
 
 void ULiveKitSubsystem::Initialize(FSubsystemCollectionBase& Collection)
@@ -9,7 +9,7 @@ void ULiveKitSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     Super::Initialize(Collection);
 
     TWeakObjectPtr<ULiveKitSubsystem> WeakThis(this);
-    Bridge = MakeShared<FLiveKitAppleBridge>(
+    Bridge = CreateLiveKitPlatformBridge(
         [WeakThis](ELiveKitConnectionState State)
         {
             const auto ApplyState = [WeakThis, State]()
@@ -150,7 +150,12 @@ void ULiveKitSubsystem::Initialize(FSubsystemCollectionBase& Collection)
                 }
             });
         });
-    Bridge->ActivateLifetimeGate();
+    UE_LOG(
+        LogTemp,
+        Log,
+        TEXT("LiveKit platform backend: %s (SDK available: %s)"),
+        *Bridge->GetBackendName(),
+        Bridge->IsSdkAvailable() ? TEXT("yes") : TEXT("no"));
 }
 
 void ULiveKitSubsystem::Deinitialize()
@@ -417,7 +422,19 @@ void ULiveKitSubsystem::SetConnectionState(ELiveKitConnectionState NewState)
         return;
     }
 
+    const ELiveKitConnectionState PreviousState = ConnectionState;
     ConnectionState = NewState;
+    if (PreviousState == ELiveKitConnectionState::Reconnecting &&
+        NewState == ELiveKitConnectionState::Connected &&
+        Bridge)
+    {
+        // A caller may change the desired microphone state while the SDK is
+        // reconnecting, when SetMicrophoneEnabled deliberately avoids touching
+        // the room. Reapply it before announcing recovery. Restricting this to
+        // Reconnecting -> Connected also avoids a second publication during the
+        // initial Connecting -> Connected transition.
+        Bridge->SetMicrophoneEnabled(bMicrophoneEnabled);
+    }
     if (NewState == ELiveKitConnectionState::Disconnected)
     {
         RemoteParticipants.Reset();
@@ -440,8 +457,12 @@ void ULiveKitSubsystem::ReportError(const FLiveKitError& Error)
 
 void ULiveKitSubsystem::HandleParticipantConnected(const FLiveKitParticipantInfo& Participant)
 {
+    const bool bWasAlreadyPresent = RemoteParticipants.Contains(Participant.Identity);
     RemoteParticipants.Add(Participant.Identity, Participant);
-    OnParticipantConnected.Broadcast(Participant);
+    if (!bWasAlreadyPresent)
+    {
+        OnParticipantConnected.Broadcast(Participant);
+    }
 }
 
 void ULiveKitSubsystem::HandleParticipantDisconnected(const FLiveKitParticipantInfo& Participant)

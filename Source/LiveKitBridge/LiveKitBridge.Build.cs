@@ -1,4 +1,9 @@
+using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
 using UnrealBuildTool;
 
 public class LiveKitBridge : ModuleRules
@@ -35,6 +40,90 @@ public class LiveKitBridge : ModuleRules
             File.Exists(facadeHeader);
 
         PublicDefinitions.Add("WITH_LIVEKIT_APPLE=" + (hasLiveKit ? "1" : "0"));
+
+        bool isWindows = Target.Platform == UnrealTargetPlatform.Win64;
+        bool isInternalBuild =
+            Target.Configuration == UnrealTargetConfiguration.Debug ||
+            Target.Configuration == UnrealTargetConfiguration.DebugGame ||
+            Target.Configuration == UnrealTargetConfiguration.Development;
+        string windowsRoot = Path.GetFullPath(Path.Combine(ModuleDirectory, "..", "ThirdParty", "Windows"));
+        string windowsPointerPath = Path.Combine(windowsRoot, "active-sdk.txt");
+        string windowsLockPath = Path.Combine(windowsRoot, "dependencies.lock");
+        string windowsSdkRoot = ResolveWindowsSdkRoot(windowsRoot);
+        bool hasResolvedWindowsSdk = !string.IsNullOrEmpty(windowsSdkRoot);
+        if (!hasResolvedWindowsSdk)
+        {
+            // A present but invalid pointer must not silently select the legacy
+            // SDK. Use a guaranteed-unverified path so the existing fallback
+            // backend is compiled instead.
+            windowsSdkRoot = Path.Combine(windowsRoot, "__invalid_active_sdk__");
+        }
+        string windowsInclude = Path.Combine(windowsSdkRoot, "include");
+        string windowsLib = Path.Combine(windowsSdkRoot, "lib");
+        string windowsBin = Path.Combine(windowsSdkRoot, "bin");
+        string windowsLiveKitLib = Path.Combine(windowsLib, "livekit.lib");
+        string windowsFfiLib = Path.Combine(windowsLib, "livekit_ffi.dll.lib");
+        string windowsLiveKitDll = Path.Combine(windowsBin, "livekit.dll");
+        string windowsFfiDll = Path.Combine(windowsBin, "livekit_ffi.dll");
+        string windowsAdapterRoot = Path.Combine(PluginDirectory, "Source", "WindowsAdapter");
+        string windowsAdapterInclude = Path.Combine(windowsAdapterRoot, "include");
+        string windowsAdapterLib = Path.Combine(windowsLib, "LiveKitUnrealWindowsAdapter.lib");
+        string windowsAdapterDll = Path.Combine(windowsBin, "LiveKitUnrealWindowsAdapter.dll");
+        string windowsAdapterPdb = Path.Combine(windowsBin, "LiveKitUnrealWindowsAdapter.pdb");
+        if (isWindows)
+        {
+            // Missing external dependencies are intentional: UBT treats them as
+            // invalidating a cached makefile, so a later SDK activation is seen.
+            ExternalDependencies.Add(windowsPointerPath);
+            ExternalDependencies.Add(windowsLockPath);
+            foreach (string provenanceName in new[]
+            {
+                ".source.json",
+                ".files.sha256",
+                ".adapter-build.json",
+                ".managed-install.json",
+                ".verified.json"
+            })
+            {
+                ExternalDependencies.Add(Path.Combine(windowsSdkRoot, provenanceName));
+            }
+            foreach (string sourceDirectoryName in new[] { "include", "src" })
+            {
+                string sourceDirectory = Path.Combine(windowsAdapterRoot, sourceDirectoryName);
+                if (!Directory.Exists(sourceDirectory))
+                {
+                    continue;
+                }
+                foreach (string sourcePath in Directory.GetFiles(
+                    sourceDirectory,
+                    "*",
+                    SearchOption.AllDirectories))
+                {
+                    if (IsAdapterSourceExtension(Path.GetExtension(sourcePath)))
+                    {
+                        ExternalDependencies.Add(sourcePath);
+                    }
+                }
+            }
+        }
+        bool hasWindowsSdk = isWindows &&
+            isInternalBuild &&
+            hasResolvedWindowsSdk &&
+            HasVerifiedWindowsSdk(
+                windowsRoot,
+                windowsSdkRoot,
+                windowsInclude,
+                windowsAdapterRoot,
+                windowsAdapterDll,
+                windowsAdapterLib,
+                windowsAdapterPdb,
+                File.Exists(windowsPointerPath),
+                windowsLiveKitLib,
+                windowsFfiLib,
+                windowsLiveKitDll,
+                windowsFfiDll);
+
+        PublicDefinitions.Add("WITH_LIVEKIT_WINDOWS=" + (hasWindowsSdk ? "1" : "0"));
 
         if (isApple)
         {
@@ -82,6 +171,43 @@ public class LiveKitBridge : ModuleRules
             }
         }
 
+        if (hasWindowsSdk)
+        {
+            bEnableExceptions = true;
+            PrivateIncludePaths.Add(windowsAdapterInclude);
+            PublicAdditionalLibraries.Add(windowsAdapterLib);
+            PublicDelayLoadDLLs.AddRange(new[]
+            {
+                "livekit_ffi.dll",
+                "livekit.dll",
+                "LiveKitUnrealWindowsAdapter.dll"
+            });
+            RuntimeDependencies.Add(
+                "$(BinaryOutputDir)/livekit_ffi.dll",
+                windowsFfiDll,
+                StagedFileType.NonUFS);
+            RuntimeDependencies.Add(
+                "$(BinaryOutputDir)/livekit.dll",
+                windowsLiveKitDll,
+                StagedFileType.NonUFS);
+            RuntimeDependencies.Add(
+                "$(BinaryOutputDir)/LiveKitUnrealWindowsAdapter.dll",
+                windowsAdapterDll,
+                StagedFileType.NonUFS);
+            RuntimeDependencies.Add(
+                "$(BinaryOutputDir)/LiveKitBridge-THIRD_PARTY_NOTICES.md",
+                Path.Combine(PluginDirectory, "THIRD_PARTY_NOTICES.md"),
+                StagedFileType.NonUFS);
+            RuntimeDependencies.Add(
+                "$(BinaryOutputDir)/LiveKitBridge-LICENSE.txt",
+                Path.Combine(PluginDirectory, "LICENSE"),
+                StagedFileType.NonUFS);
+            RuntimeDependencies.Add(
+                "$(BinaryOutputDir)/LiveKitBridge-NOTICE.txt",
+                Path.Combine(PluginDirectory, "NOTICE"),
+                StagedFileType.NonUFS);
+        }
+
         void AddMacFramework(string name)
         {
             string frameworkPath = Path.Combine(appleRoot, "Mac", name + ".framework");
@@ -89,6 +215,344 @@ public class LiveKitBridge : ModuleRules
                 frameworkPath,
                 frameworkPath,
                 Framework.FrameworkMode.LinkAndCopy));
+        }
+    }
+
+    private static string ResolveWindowsSdkRoot(string windowsRoot)
+    {
+        try
+        {
+            string normalizedWindowsRoot = Path.GetFullPath(windowsRoot).TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar);
+            string pointerPath = Path.Combine(normalizedWindowsRoot, "active-sdk.txt");
+            if (!File.Exists(pointerPath))
+            {
+                // Compatibility for SDKs fetched before immutable install
+                // directories and the active pointer were introduced.
+                string legacySdkRoot = Path.Combine(normalizedWindowsRoot, "SDK");
+                return Directory.Exists(legacySdkRoot) && IsReparsePoint(legacySdkRoot)
+                    ? string.Empty
+                    : legacySdkRoot;
+            }
+
+            string rawPointerValue = File.ReadAllText(pointerPath);
+            string pointerValue = rawPointerValue.Trim();
+            if (string.IsNullOrWhiteSpace(pointerValue) ||
+                !string.Equals(rawPointerValue, pointerValue, StringComparison.Ordinal) ||
+                Path.IsPathRooted(pointerValue) ||
+                pointerValue.EndsWith(".", StringComparison.Ordinal) ||
+                !Regex.IsMatch(
+                    pointerValue,
+                    @"\ASDKs/[A-Za-z0-9][A-Za-z0-9._-]*\z",
+                    RegexOptions.CultureInvariant | RegexOptions.IgnoreCase))
+            {
+                return string.Empty;
+            }
+
+            foreach (string segment in pointerValue.Split(new[] { '/', '\\' }))
+            {
+                if (segment == "..")
+                {
+                    return string.Empty;
+                }
+            }
+
+            string installsRoot = Path.GetFullPath(Path.Combine(normalizedWindowsRoot, "SDKs"));
+            string sdkRoot = Path.GetFullPath(Path.Combine(
+                normalizedWindowsRoot,
+                pointerValue.Replace('/', Path.DirectorySeparatorChar)));
+            string installsPrefix = installsRoot.TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            if (!sdkRoot.StartsWith(installsPrefix, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(
+                    Path.GetDirectoryName(sdkRoot),
+                    installsRoot,
+                    StringComparison.OrdinalIgnoreCase) ||
+                !Directory.Exists(sdkRoot) ||
+                IsReparsePoint(installsRoot) ||
+                IsReparsePoint(sdkRoot))
+            {
+                return string.Empty;
+            }
+
+            return sdkRoot;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static bool IsReparsePoint(string path)
+    {
+        return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+    }
+
+    private static bool HasVerifiedWindowsSdk(
+        string windowsRoot,
+        string sdkRoot,
+        string includeRoot,
+        string adapterRoot,
+        string adapterDll,
+        string adapterLib,
+        string adapterPdb,
+        bool requiresManagedInstall,
+        params string[] requiredFiles)
+    {
+        const string pinnedVersion = "1.3.0";
+        const string pinnedArchiveSha256 =
+            "27a8707348d7fb094023b7c8af29e26b8e4085a4dab75d26be3968f29b2269c3";
+
+        string lockPath = Path.Combine(windowsRoot, "dependencies.lock");
+        string sourcePath = Path.Combine(sdkRoot, ".source.json");
+        string manifestPath = Path.Combine(sdkRoot, ".files.sha256");
+        string adapterBuildPath = Path.Combine(sdkRoot, ".adapter-build.json");
+        string managedInstallPath = Path.Combine(sdkRoot, ".managed-install.json");
+        string markerPath = Path.Combine(sdkRoot, ".verified.json");
+        string liveKitHeader = Path.Combine(includeRoot, "livekit", "livekit.h");
+        if (!File.Exists(lockPath) ||
+            !File.Exists(sourcePath) ||
+            !File.Exists(manifestPath) ||
+            !File.Exists(adapterBuildPath) ||
+            !File.Exists(markerPath) ||
+            !File.Exists(liveKitHeader) ||
+            !Directory.Exists(Path.Combine(adapterRoot, "include")) ||
+            !Directory.Exists(Path.Combine(adapterRoot, "src")) ||
+            !File.Exists(adapterDll) ||
+            !File.Exists(adapterLib) ||
+            !File.Exists(adapterPdb))
+        {
+            return false;
+        }
+
+        bool hasManagedInstall = File.Exists(managedInstallPath);
+        if (requiresManagedInstall && !hasManagedInstall)
+        {
+            return false;
+        }
+        if (hasManagedInstall)
+        {
+            string managedInstallText = File.ReadAllText(managedInstallPath);
+            string installKind = ReadJsonString(managedInstallText, "installKind");
+            DateTimeOffset createdUtc;
+            if (ReadJsonString(managedInstallText, "schemaVersion") != "1" ||
+                ReadJsonString(managedInstallText, "managedBy") != "livekitbridge" ||
+                ReadJsonString(managedInstallText, "installName") !=
+                    Path.GetFileName(sdkRoot).ToLowerInvariant() ||
+                (installKind != "fetch" && installKind != "adapter-rebuild") ||
+                !DateTimeOffset.TryParse(
+                    ReadJsonString(managedInstallText, "createdUtc"),
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind,
+                    out createdUtc))
+            {
+                return false;
+            }
+        }
+        foreach (string requiredFile in requiredFiles)
+        {
+            if (!File.Exists(requiredFile) || new FileInfo(requiredFile).Length == 0)
+            {
+                return false;
+            }
+        }
+
+        string adapterSourceSetSha256 = HashAdapterSourceSet(adapterRoot);
+        if (string.IsNullOrEmpty(adapterSourceSetSha256))
+        {
+            return false;
+        }
+
+        string lockText = File.ReadAllText(lockPath);
+        if (!Regex.IsMatch(lockText, @"(?m)^LIVEKIT_CPP_VERSION=1\.3\.0\s*$") ||
+            !Regex.IsMatch(
+                lockText,
+                @"(?m)^LIVEKIT_CPP_SHA256=" + pinnedArchiveSha256 + @"\s*$"))
+        {
+            return false;
+        }
+
+        string markerText = File.ReadAllText(markerPath);
+        return ReadJsonString(markerText, "version") == pinnedVersion &&
+            ReadJsonString(markerText, "archiveSha256") == pinnedArchiveSha256 &&
+            ReadJsonString(markerText, "lockSha256") == HashFile(lockPath) &&
+            ReadJsonString(markerText, "sourceSha256") == HashFile(sourcePath) &&
+            ReadJsonString(markerText, "manifestSha256") == HashFile(manifestPath) &&
+            ReadJsonString(markerText, "adapterBuildSha256") == HashFile(adapterBuildPath) &&
+            ReadJsonString(markerText, "adapterSourceSetSha256") == adapterSourceSetSha256 &&
+            ReadJsonString(markerText, "adapterDllSha256") == HashFile(adapterDll) &&
+            ReadJsonString(markerText, "adapterLibSha256") == HashFile(adapterLib) &&
+            ReadJsonString(markerText, "adapterPdbSha256") == HashFile(adapterPdb) &&
+            (!hasManagedInstall ||
+                ReadJsonString(markerText, "managedInstallSha256") == HashFile(managedInstallPath)) &&
+            VerifyManifestFiles(sdkRoot, manifestPath);
+    }
+
+    private static string HashAdapterSourceSet(string adapterRoot)
+    {
+        try
+        {
+            string normalizedRoot = Path.GetFullPath(adapterRoot).TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar);
+            string rootPrefix = normalizedRoot + Path.DirectorySeparatorChar;
+            List<string> relativePaths = new List<string>();
+
+            foreach (string directoryName in new[] { "include", "src" })
+            {
+                string directory = Path.Combine(normalizedRoot, directoryName);
+                if (!Directory.Exists(directory))
+                {
+                    return string.Empty;
+                }
+
+                foreach (string sourcePath in Directory.GetFiles(
+                    directory,
+                    "*",
+                    SearchOption.AllDirectories))
+                {
+                    string extension = Path.GetExtension(sourcePath);
+                    if (!IsAdapterSourceExtension(extension))
+                    {
+                        continue;
+                    }
+
+                    string fullPath = Path.GetFullPath(sourcePath);
+                    if (!fullPath.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return string.Empty;
+                    }
+                    relativePaths.Add(fullPath.Substring(rootPrefix.Length).Replace('\\', '/'));
+                }
+            }
+
+            if (relativePaths.Count == 0)
+            {
+                return string.Empty;
+            }
+            relativePaths.Sort(StringComparer.Ordinal);
+
+            StringBuilder canonical = new StringBuilder();
+            foreach (string relativePath in relativePaths)
+            {
+                string fullPath = Path.Combine(
+                    normalizedRoot,
+                    relativePath.Replace('/', Path.DirectorySeparatorChar));
+                canonical.Append(relativePath)
+                    .Append('\t')
+                    .Append(HashFile(fullPath))
+                    .Append('\n');
+            }
+            return HashBytes(Encoding.UTF8.GetBytes(canonical.ToString()));
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static bool IsAdapterSourceExtension(string extension)
+    {
+        return extension.Equals(".c", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".cc", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".cpp", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".cxx", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".h", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".hh", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".hpp", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".hxx", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool VerifyManifestFiles(string sdkRoot, string manifestPath)
+    {
+        try
+        {
+            string rootPrefix = sdkRoot.TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            int verifiedFileCount = 0;
+
+            foreach (string line in File.ReadAllLines(manifestPath))
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                int separatorIndex = line.IndexOf('\t');
+                if (separatorIndex != 64)
+                {
+                    return false;
+                }
+
+                string expectedHash = line.Substring(0, separatorIndex).ToLowerInvariant();
+                string relativePath = line.Substring(separatorIndex + 1);
+                if (!Regex.IsMatch(expectedHash, "^[a-f0-9]{64}$") ||
+                    string.IsNullOrWhiteSpace(relativePath) ||
+                    Path.IsPathRooted(relativePath))
+                {
+                    return false;
+                }
+
+                string normalizedRelativePath = relativePath.Replace(
+                    Path.AltDirectorySeparatorChar,
+                    Path.DirectorySeparatorChar);
+                foreach (string segment in normalizedRelativePath.Split(Path.DirectorySeparatorChar))
+                {
+                    if (segment == "..")
+                    {
+                        return false;
+                    }
+                }
+
+                string filePath = Path.GetFullPath(Path.Combine(sdkRoot, normalizedRelativePath));
+                if (!filePath.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase) ||
+                    !File.Exists(filePath) ||
+                    HashFile(filePath) != expectedHash)
+                {
+                    return false;
+                }
+
+                verifiedFileCount++;
+            }
+
+            return verifiedFileCount > 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string ReadJsonString(string json, string key)
+    {
+        Match match = Regex.Match(
+            json,
+            "\"" + Regex.Escape(key) + "\"\\s*:\\s*\"([^\"]+)\"",
+            RegexOptions.CultureInvariant);
+        return match.Success ? match.Groups[1].Value.ToLowerInvariant() : string.Empty;
+    }
+
+    private static string HashFile(string path)
+    {
+        using (SHA256 sha256 = SHA256.Create())
+        using (FileStream stream = File.OpenRead(path))
+        {
+            return System.BitConverter.ToString(sha256.ComputeHash(stream))
+                .Replace("-", string.Empty)
+                .ToLowerInvariant();
+        }
+    }
+
+    private static string HashBytes(byte[] bytes)
+    {
+        using (SHA256 sha256 = SHA256.Create())
+        {
+            return System.BitConverter.ToString(sha256.ComputeHash(bytes))
+                .Replace("-", string.Empty)
+                .ToLowerInvariant();
         }
     }
 }

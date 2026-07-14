@@ -3,12 +3,12 @@
 #include "CoreMinimal.h"
 #include "LiveKitPlatformBridge.h"
 
-class FLiveKitAppleBridge final
+class FLiveKitWindowsBridge final
     : public ILiveKitPlatformBridge
-    , public TSharedFromThis<FLiveKitAppleBridge, ESPMode::ThreadSafe>
+    , public TSharedFromThis<FLiveKitWindowsBridge, ESPMode::ThreadSafe>
 {
 public:
-    FLiveKitAppleBridge(
+    FLiveKitWindowsBridge(
         FStateHandler InStateHandler,
         FErrorHandler InErrorHandler,
         FParticipantHandler InParticipantConnectedHandler,
@@ -21,15 +21,14 @@ public:
         FRpcInvocationHandler InRpcInvocationHandler,
         FRpcResultHandler InRpcResultHandler,
         FPublishResultHandler InPublishResultHandler);
-    virtual ~FLiveKitAppleBridge() override;
+    virtual ~FLiveKitWindowsBridge() override;
 
-    // Must be called immediately after MakeShared so asynchronous Apple SDK
-    // callbacks can pin this bridge instead of retaining a raw pointer.
+    /** Called by the factory after MakeShared so tasks can pin this object. */
     void ActivateLifetimeGate();
-    virtual void Shutdown() override;
 
+    virtual void Shutdown() override;
     virtual bool IsSdkAvailable() const override;
-    virtual FString GetBackendName() const override { return TEXT("Apple"); }
+    virtual FString GetBackendName() const override { return TEXT("Windows"); }
     virtual void Connect(
         const FString& ServerUrl,
         const FString& Token,
@@ -61,35 +60,14 @@ public:
         const FString& Message,
         const FString& Data) override;
 
-    void NotifyState(ELiveKitConnectionState State);
-    void NotifyError(const FLiveKitError& Error);
-    void NotifyParticipantConnected(const FLiveKitParticipantInfo& Participant);
-    void NotifyParticipantDisconnected(const FLiveKitParticipantInfo& Participant);
-    void NotifyParticipantSpeaking(const FLiveKitParticipantInfo& Participant, bool bIsSpeaking);
-    void NotifyData(const FLiveKitDataMessage& Message);
-    void NotifyByteStreamRegistrationResult(
-        const FString& Topic,
-        bool bSuccess,
-        const FLiveKitError& Error);
-    void NotifyByteStream(const FLiveKitByteStream& Stream);
-    void NotifyRpcRegistrationResult(
-        const FString& Method,
-        bool bSuccess,
-        const FLiveKitError& Error);
-    void NotifyRpcInvocation(const FLiveKitRpcInvocation& Invocation);
-    void NotifyRpcResult(
-        const FString& RequestId,
-        bool bSuccess,
-        const FString& ResponsePayload,
-        const FLiveKitError& Error);
-    void NotifyPublishResult(const FString& OperationId, bool bSuccess, const FLiveKitError& Error);
-    bool IsManualDisconnectInProgress() const;
-
 private:
-    void CreateRoom();
+    bool DispatchControl(TFunction<void(FLiveKitWindowsBridge&)> Work);
+    bool DispatchByteStream(TFunction<void(FLiveKitWindowsBridge&)> Work);
+    void ReportUnavailable(const FString& Operation = FString()) const;
 
     struct FImplementation;
     TUniquePtr<FImplementation> Implementation;
+
     FStateHandler StateHandler;
     FErrorHandler ErrorHandler;
     FParticipantHandler ParticipantConnectedHandler;

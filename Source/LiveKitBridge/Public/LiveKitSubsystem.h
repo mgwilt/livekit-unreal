@@ -5,7 +5,7 @@
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "LiveKitSubsystem.generated.h"
 
-class FLiveKitAppleBridge;
+class ILiveKitPlatformBridge;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FLiveKitConnectionStateChanged, ELiveKitConnectionState, State);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FLiveKitErrorEvent, const FLiveKitError&, Error);
@@ -42,7 +42,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(
     Error);
 
 /**
- * Blueprint-first LiveKit room client for Unreal Engine on Apple platforms.
+ * Blueprint-first LiveKit room client for Unreal Engine.
  *
  * The subsystem accepts a URL and participant token supplied by the host game.
  * It never creates tokens or stores LiveKit API secrets.
@@ -121,10 +121,9 @@ public:
     /**
      * Reject an incoming RPC invocation.
      *
-     * LiveKit Swift 2.15.1 does not expose a public RpcError initializer, so
-     * the remote caller receives built-in error 1500 (Application Error).
-     * ErrorCode, Message, and Data are retained as local diagnostic intent but
-     * cannot be transmitted verbatim by this pinned SDK release.
+     * The Windows C++ backend transmits ErrorCode, Message, and Data. The Apple
+     * Swift backend maps the failure to built-in error 1500 (Application Error)
+     * because its pinned SDK does not expose a public RpcError initializer.
      */
     UFUNCTION(BlueprintCallable, Category="LiveKit|RPC")
     void FailRpcInvocation(
@@ -170,6 +169,10 @@ public:
 #endif
 
 private:
+#if WITH_DEV_AUTOMATION_TESTS
+    friend class FLiveKitSubsystemTestAccess;
+#endif
+
     void SetConnectionState(ELiveKitConnectionState NewState);
     void ReportError(const FLiveKitError& Error);
     void HandleParticipantConnected(const FLiveKitParticipantInfo& Participant);
@@ -181,5 +184,5 @@ private:
     TMap<FString, FLiveKitParticipantInfo> RemoteParticipants;
     TSet<FString> RegisteredByteStreamTopics;
     TSet<FString> RegisteredRpcMethods;
-    TSharedPtr<FLiveKitAppleBridge> Bridge;
+    TSharedPtr<ILiveKitPlatformBridge> Bridge;
 };

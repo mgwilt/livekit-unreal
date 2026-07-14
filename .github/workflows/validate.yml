@@ -34,10 +34,10 @@ jobs:
             abort "unexpected plugin name" unless descriptor.fetch("FriendlyName") == "LiveKit for Unreal (Community)"
             abort "unexpected engine version" unless descriptor.fetch("EngineVersion") == "5.8.0"
             abort "source descriptor must not be installed" unless descriptor.fetch("Installed") == false
-            abort "unexpected platforms" unless descriptor.fetch("SupportedTargetPlatforms").sort == %w[IOS Mac]
+            abort "unexpected platforms" unless descriptor.fetch("SupportedTargetPlatforms").sort == %w[IOS Mac Win64]
             module_descriptor = descriptor.fetch("Modules").find { |entry| entry.fetch("Name") == "LiveKitBridge" }
             abort "LiveKitBridge module is missing" unless module_descriptor
-            abort "unexpected module platforms" unless module_descriptor.fetch("PlatformAllowList").sort == %w[IOS Mac]
+            abort "unexpected module platforms" unless module_descriptor.fetch("PlatformAllowList").sort == %w[IOS Mac Win64]
           '
 
       - name: Validate dependency lock
