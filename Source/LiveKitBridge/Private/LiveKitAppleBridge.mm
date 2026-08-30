@@ -1,3 +1,7 @@
+#include "HAL/Platform.h"
+
+#if PLATFORM_MAC || PLATFORM_IOS
+
 #include "LiveKitAppleBridge.h"
 
 #include "Async/Async.h"
@@ -842,3 +846,5 @@ bool FLiveKitAppleBridge::IsManualDisconnectInProgress() const
     return false;
 #endif
 }
+
+#endif // PLATFORM_MAC || PLATFORM_IOS

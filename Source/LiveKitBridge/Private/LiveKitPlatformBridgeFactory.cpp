@@ -53,7 +53,6 @@ TSharedPtr<ILiveKitPlatformBridge> CreateLiveKitPlatformBridge(
     Bridge->ActivateLifetimeGate();
     return Bridge;
 #else
-    static_assert(PLATFORM_MAC || PLATFORM_IOS || PLATFORM_WINDOWS, "Unsupported LiveKitBridge platform");
     return nullptr;
 #endif
 }

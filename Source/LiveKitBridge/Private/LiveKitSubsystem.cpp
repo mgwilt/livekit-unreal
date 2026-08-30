@@ -150,12 +150,19 @@ void ULiveKitSubsystem::Initialize(FSubsystemCollectionBase& Collection)
                 }
             });
         });
-    UE_LOG(
-        LogTemp,
-        Log,
-        TEXT("LiveKit platform backend: %s (SDK available: %s)"),
-        *Bridge->GetBackendName(),
-        Bridge->IsSdkAvailable() ? TEXT("yes") : TEXT("no"));
+    if (Bridge)
+    {
+        UE_LOG(
+            LogTemp,
+            Log,
+            TEXT("LiveKit platform backend: %s (SDK available: %s)"),
+            *Bridge->GetBackendName(),
+            Bridge->IsSdkAvailable() ? TEXT("yes") : TEXT("no"));
+    }
+    else
+    {
+        UE_LOG(LogTemp, Log, TEXT("LiveKit platform backend: unavailable"));
+    }
 }
 
 void ULiveKitSubsystem::Deinitialize()
