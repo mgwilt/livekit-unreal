@@ -116,6 +116,10 @@ void FLiveKitWindowsBridge::FImplementation::HandleTerminalRoom(LKUB_Room* InRoo
     {
         return;
     }
+#if WITH_LIVEKIT_LINUX
+    bCaptureRunning.store(false, std::memory_order_release);
+    if (const auto Pinned = Owner.Pin()) Pinned->bMicrophoneCapturing.Store(false);
+#endif
     lkub_room_detach_callbacks(TerminalRoom);
     QuarantineLiveKitWindowsRoom(TerminalRoom);
     ClearSpeakers();

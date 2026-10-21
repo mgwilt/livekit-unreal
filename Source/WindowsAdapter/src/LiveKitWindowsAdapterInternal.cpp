@@ -122,6 +122,7 @@ void LKUB_Room::ClearAudio()
     std::lock_guard Lock(AudioMutex);
     MicrophoneTrack.reset();
     MicrophoneSource.reset();
+    RawMicrophoneSource.reset();
     PlatformAudio.reset();
 }
 

@@ -213,6 +213,17 @@ int32_t LKUB_CALL lkub_room_set_microphone_enabled(
     return Guard(OutResult, [&]()
     {
         Require(Room != nullptr && Room->SdkRoom, "The room is unavailable.");
+        Require(
+            !Room->ReceiveAudio || Enabled == 0,
+            "Raw receive rooms require capture-only microphone PCM.");
+        if (Room->ReceiveAudio)
+        {
+            LKUB_Result StopResult{};
+            const int32_t Status = lkub_room_stop_raw_microphone(Room, &StopResult);
+            if (Status != LKUB_STATUS_OK)
+                throw std::runtime_error(StopResult.message);
+            return;
+        }
         std::shared_ptr<livekit::LocalAudioTrack> ExistingTrack;
         std::shared_ptr<livekit::PlatformAudio> Audio;
         {

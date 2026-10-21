@@ -150,6 +150,7 @@ public class LiveKitBridge : ModuleRules
         }
         if (hasLinuxSdk)
         {
+            AddEngineThirdPartyPrivateStaticDependencies(Target, "SDL3");
             bEnableExceptions = true;
             PrivateIncludePaths.Add(windowsAdapterInclude);
             PublicAdditionalLibraries.Add(linuxAdapter);

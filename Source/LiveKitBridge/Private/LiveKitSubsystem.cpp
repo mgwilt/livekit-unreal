@@ -506,3 +506,8 @@ bool ULiveKitSubsystem::ConfigureAudioReceiver(const FString& Participant, const
         if (WeakThis.IsValid()) WeakThis->OnPcmReceived.Broadcast(Frame);
     });
 }
+
+bool ULiveKitSubsystem::IsMicrophoneCapturing() const
+{
+    return Bridge && Bridge->IsMicrophoneCapturing();
+}

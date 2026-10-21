@@ -18,6 +18,11 @@ bool FLiveKitWindowsBridge::TickAudio(float)
 {
 #if WITH_LIVEKIT_LINUX
     if (!AudioHandler || !Implementation) return true;
+    if (Implementation->bCaptureFailed.exchange(false, std::memory_order_acq_rel))
+    {
+        bMicrophoneCapturing.Store(false);
+        ErrorHandler(MakeLiveKitError(TEXT("microphone_capture_failed"), TEXT("The recording stream stopped.")));
+    }
     std::unique_lock Lock(Implementation->ControlMutex, std::try_to_lock);
     if (!Lock.owns_lock()) return true;
     LKUB_Room* Room = nullptr;

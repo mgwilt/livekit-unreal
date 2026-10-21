@@ -96,6 +96,7 @@ struct LKUB_Room final : livekit::RoomDelegate
     std::mutex AudioMutex;
     std::shared_ptr<livekit::PlatformAudio> PlatformAudio;
     std::shared_ptr<livekit::PlatformAudioSource> MicrophoneSource;
+    std::shared_ptr<livekit::AudioSource> RawMicrophoneSource;
     std::shared_ptr<livekit::LocalAudioTrack> MicrophoneTrack;
 
     struct ReceivedAudio

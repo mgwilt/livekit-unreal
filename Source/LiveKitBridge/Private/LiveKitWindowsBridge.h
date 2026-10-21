@@ -44,6 +44,8 @@ public:
         bool bEnableVoiceProcessing) override;
     virtual void Disconnect() override;
     virtual void SetMicrophoneEnabled(bool bEnabled) override;
+    virtual bool IsMicrophoneCapturing() const override { return bMicrophoneCapturing.Load(); }
+    TAtomic<bool> bMicrophoneCapturing{false};
     virtual void PublishData(
         const FString& OperationId,
         const TArray<uint8>& Data,

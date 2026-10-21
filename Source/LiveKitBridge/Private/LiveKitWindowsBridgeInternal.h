@@ -13,6 +13,11 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <thread>
+
+#if WITH_LIVEKIT_LINUX
+struct SDL_AudioStream;
+#endif
 
 #if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
 #include "LiveKitWindowsAdapter.h"
@@ -104,6 +109,17 @@ struct FLiveKitWindowsBridge::FImplementation
     void AdvancePastAbandonedControlTickets();
     void FinishControlTicket(uint64 Ticket);
     void AbandonControlTicket(uint64 Ticket);
+
+#if WITH_LIVEKIT_LINUX
+    // Control tasks own capture resources. The worker only reads PCM and publishes it.
+    bool StartRawMicrophone(LKUB_Room* Candidate, FLiveKitError& OutError);
+    void StopRawMicrophone();
+    std::atomic_bool bCaptureRunning{false};
+    std::atomic_bool bCaptureFailed{false};
+    std::thread CaptureThread;
+    SDL_AudioStream* CaptureStream = nullptr;
+    bool bCaptureAudioInitialized = false;
+#endif
 
     // Room state and lifecycle.
     uint64 BeginConnectionRequest();

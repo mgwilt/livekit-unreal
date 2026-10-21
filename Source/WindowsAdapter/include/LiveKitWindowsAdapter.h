@@ -276,6 +276,23 @@ LKUB_API int32_t LKUB_CALL lkub_room_set_microphone_enabled(
     uint8_t enabled,
     LKUB_Result* out_result);
 
+/* Raw receive rooms use capture-only PCM. Push one 10 ms, 48 kHz mono frame. */
+LKUB_API int32_t LKUB_CALL lkub_room_start_raw_microphone(
+    LKUB_Room* room,
+    int32_t sample_rate,
+    int32_t channels,
+    LKUB_Result* out_result);
+
+LKUB_API int32_t LKUB_CALL lkub_room_push_microphone_pcm(
+    LKUB_Room* room,
+    const int16_t* samples,
+    int32_t samples_per_channel,
+    LKUB_Result* out_result);
+
+LKUB_API int32_t LKUB_CALL lkub_room_stop_raw_microphone(
+    LKUB_Room* room,
+    LKUB_Result* out_result);
+
 LKUB_API int32_t LKUB_CALL lkub_room_publish_data(
     LKUB_Room* room,
     LKUB_BytesView payload,

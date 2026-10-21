@@ -40,6 +40,7 @@ public:
         bool bEnableVoiceProcessing) = 0;
     virtual void Disconnect() = 0;
     virtual void SetMicrophoneEnabled(bool bEnabled) = 0;
+    virtual bool IsMicrophoneCapturing() const { return false; }
     virtual void PublishData(
         const FString& OperationId,
         const TArray<uint8>& Data,

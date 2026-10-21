@@ -76,6 +76,10 @@ public:
     UFUNCTION(BlueprintPure, Category="LiveKit|Audio")
     bool IsMicrophoneEnabled() const { return bMicrophoneEnabled; }
 
+    /** True after the native microphone publication has completed. */
+    UFUNCTION(BlueprintPure, Category="LiveKit|Audio")
+    bool IsMicrophoneCapturing() const;
+
     UFUNCTION(BlueprintPure, Category="LiveKit")
     ELiveKitConnectionState GetConnectionState() const { return ConnectionState; }
 

@@ -355,6 +355,9 @@ void FLiveKitWindowsBridge::Shutdown()
     Implementation->InvalidateConnectionRequest();
     {
         std::lock_guard ControlLock(Implementation->ControlMutex);
+#if WITH_LIVEKIT_LINUX
+        Implementation->StopRawMicrophone();
+#endif
         if (LKUB_Room* Room = Implementation->GetRoom())
         {
             Implementation->DisconnectRoomOrQuarantine(Room);

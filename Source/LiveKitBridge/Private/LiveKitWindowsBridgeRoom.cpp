@@ -205,6 +205,9 @@ bool FLiveKitWindowsBridge::FImplementation::DisconnectRoomOrQuarantine(
         return true;
     }
 
+#if WITH_LIVEKIT_LINUX
+    StopRawMicrophone();
+#endif
     // Detaching first prevents terminal callbacks from racing ownership of
     // the same opaque room while disconnect is in progress.
     lkub_room_detach_callbacks(Candidate);
@@ -288,6 +291,9 @@ void FLiveKitWindowsBridge::Connect(
 
         try
         {
+#if WITH_LIVEKIT_LINUX
+            Bridge.Implementation->StopRawMicrophone();
+#endif
             if (LKUB_Room* PreviousRoom = Bridge.Implementation->GetRoom())
             {
                 Bridge.Implementation->DisconnectRoomOrQuarantine(PreviousRoom);
@@ -428,6 +434,7 @@ void FLiveKitWindowsBridge::Connect(
 
 void FLiveKitWindowsBridge::Disconnect()
 {
+    bMicrophoneCapturing.Store(false);
     if (!IsSdkAvailable())
     {
         StateHandler(ELiveKitConnectionState::Disconnected);
@@ -472,18 +479,44 @@ void FLiveKitWindowsBridge::SetMicrophoneEnabled(bool bEnabled)
     DispatchControl([bEnabled](FLiveKitWindowsBridge& Bridge)
     {
 #if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
-        LKUB_Room* Room = Bridge.Implementation->GetRoom();
-        if (Room == nullptr)
+        LKUB_Room* Room = nullptr;
+        uint64 Generation = 0;
+        if (!Bridge.Implementation->GetCurrentRoom(Room, Generation)) return;
+#if WITH_LIVEKIT_LINUX
+        if (!Bridge.AudioParticipant.IsEmpty())
         {
+            FLiveKitError Error;
+            bool bSuccess = true;
+            if (bEnabled)
+                bSuccess = Bridge.Implementation->StartRawMicrophone(Room, Error);
+            else
+            {
+                Bridge.Implementation->StopRawMicrophone();
+                LKUB_Result Result{};
+                if (lkub_room_stop_raw_microphone(Room, &Result) != LKUB_STATUS_OK)
+                {
+                    bSuccess = false;
+                    Error = AdapterError(TEXT("microphone_stop_failed"), Result);
+                }
+            }
+            Bridge.bMicrophoneCapturing.Store(bSuccess && bEnabled &&
+                Bridge.Implementation->IsCurrentRoom(Room, Generation));
+            if (!bSuccess) Bridge.ErrorHandler(Error);
             return;
         }
+#endif
         LKUB_Result Result{};
         if (lkub_room_set_microphone_enabled(
                 Room,
                 bEnabled ? 1 : 0,
                 &Result) != LKUB_STATUS_OK)
         {
+            Bridge.bMicrophoneCapturing.Store(false);
             Bridge.ErrorHandler(AdapterError(TEXT("microphone_update_failed"), Result));
+        }
+        else
+        {
+            Bridge.bMicrophoneCapturing.Store(bEnabled);
         }
 #endif
     });
