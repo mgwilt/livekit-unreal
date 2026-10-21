@@ -6,10 +6,11 @@
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
 
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
 #include "LiveKitWindowsBridge.h"
 #include "LiveKitWindowsAdapter.h"
 #include "Misc/ScopeLock.h"
+#if WITH_LIVEKIT_WINDOWS
 #include "Windows/AllowWindowsPlatformTypes.h"
 
 #include <atomic>
@@ -17,17 +18,21 @@
 
 #include "Windows/HideWindowsPlatformTypes.h"
 #endif
+#include <atomic>
+#endif
 
 DEFINE_LOG_CATEGORY_STATIC(LogLiveKitBridgeModule, Log, All);
 
 namespace
 {
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
 std::atomic_bool GWindowsSdkAvailable{false};
 bool GWindowsSdkInitializationOwned = false;
+#if WITH_LIVEKIT_WINDOWS
 void* GWindowsFfiDllHandle = nullptr;
 void* GWindowsLiveKitDllHandle = nullptr;
 void* GWindowsAdapterDllHandle = nullptr;
+#endif
 FCriticalSection GWindowsBridgeRegistryMutex;
 TArray<TSharedPtr<FLiveKitWindowsBridge, ESPMode::ThreadSafe>> GWindowsBridges;
 TArray<LKUB_Room*> GWindowsRoomQuarantine;
@@ -39,14 +44,14 @@ constexpr bool GWindowsSdkAvailable = false;
 
 bool IsLiveKitWindowsSdkInitialized()
 {
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
     return GWindowsSdkAvailable.load(std::memory_order_acquire);
 #else
     return GWindowsSdkAvailable;
 #endif
 }
 
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
 void RegisterLiveKitWindowsBridge(
     const TSharedRef<FLiveKitWindowsBridge, ESPMode::ThreadSafe>& Bridge)
 {
@@ -90,7 +95,7 @@ class FLiveKitBridgeModule final : public IModuleInterface
 public:
     virtual bool SupportsDynamicReloading() override
     {
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
         // The pinned LiveKit FFI can still execute worker cleanup after its
         // synchronous shutdown call returns. A live Win64 backend therefore
         // cannot safely unload or hot-reload this module in-process.
@@ -102,12 +107,12 @@ public:
 
     virtual void StartupModule() override
     {
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
         {
             FScopeLock Lock(&GWindowsBridgeRegistryMutex);
             if (!ensureAlwaysMsgf(
                     GWindowsBridges.IsEmpty() && GWindowsRoomQuarantine.IsEmpty(),
-                    TEXT("LiveKitBridge started with stale Windows bridge lifetime state.")))
+                    TEXT("LiveKitBridge started with stale C adapter lifetime state.")))
             {
                 GWindowsModuleShuttingDown = true;
                 return;
@@ -117,6 +122,7 @@ public:
         GWindowsSdkAvailable.store(false, std::memory_order_release);
         GWindowsSdkInitializationOwned = false;
 
+#if WITH_LIVEKIT_WINDOWS
         TArray<FString> BinaryDirectories;
 #if !IS_MONOLITHIC
         const FString ModuleFilename =
@@ -146,16 +152,21 @@ public:
             return;
         }
 
+#else
+        const FString LoadedDirectory(TEXT("Linux C ABI adapter"));
+#endif
         const uint32 AdapterAbiVersion = lkub_get_abi_version();
         if (AdapterAbiVersion != LKUB_ABI_VERSION)
         {
             UE_LOG(
                 LogLiveKitBridgeModule,
                 Error,
-                TEXT("LiveKit Windows adapter ABI mismatch: expected %u but loaded %u."),
+                TEXT("LiveKit C adapter ABI mismatch: expected %u but loaded %u."),
                 static_cast<uint32>(LKUB_ABI_VERSION),
                 AdapterAbiVersion);
+#if WITH_LIVEKIT_WINDOWS
             ReleaseWindowsLibrariesBeforeInitialization();
+#endif
             return;
         }
 
@@ -180,7 +191,7 @@ public:
             UE_LOG(
                 LogLiveKitBridgeModule,
                 Error,
-                TEXT("LiveKit Windows adapter initialization failed (status %d): %s"),
+                TEXT("LiveKit C adapter initialization failed (status %d): %s"),
                 InitializeStatus,
                 *Message);
             if (bInitializationOwned != 0)
@@ -198,7 +209,7 @@ public:
         UE_LOG(
             LogLiveKitBridgeModule,
             Log,
-            TEXT("LiveKit Windows adapter ABI %u available from %s (SDK lifecycle owned by LiveKitBridge)."),
+            TEXT("LiveKit C adapter ABI %u available from %s (SDK lifecycle owned by LiveKitBridge)."),
             AdapterAbiVersion,
             *LoadedDirectory);
 #endif
@@ -206,7 +217,7 @@ public:
 
     virtual void ShutdownModule() override
     {
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
         TArray<TSharedPtr<FLiveKitWindowsBridge, ESPMode::ThreadSafe>> ActiveBridges;
         {
             FScopeLock Lock(&GWindowsBridgeRegistryMutex);

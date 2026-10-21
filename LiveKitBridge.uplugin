@@ -13,13 +13,23 @@
   "EnabledByDefault": false,
   "CanContainContent": false,
   "Installed": false,
-  "SupportedTargetPlatforms": ["Mac", "IOS", "Win64"],
+  "SupportedTargetPlatforms": [
+    "Mac",
+    "IOS",
+    "Win64",
+    "Linux"
+  ],
   "Modules": [
     {
       "Name": "LiveKitBridge",
       "Type": "Runtime",
       "LoadingPhase": "Default",
-      "PlatformAllowList": ["Mac", "IOS", "Win64"]
+      "PlatformAllowList": [
+        "Mac",
+        "IOS",
+        "Win64",
+        "Linux"
+      ]
     }
   ]
 }

@@ -43,3 +43,7 @@ LiveKit.local.json
 LiveKitForUnreal-*.zip
 LiveKitForUnreal-*.zip.sha256
 release-audit.json
+
+# Downloaded Linux SDK and generated C ABI adapter.
+/Source/ThirdParty/Linux/SDK/
+/Source/ThirdParty/Linux/*.download

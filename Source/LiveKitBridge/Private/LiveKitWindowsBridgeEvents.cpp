@@ -4,7 +4,7 @@
 
 using namespace LiveKitWindowsBridgeInternal;
 
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
 
 void FLiveKitWindowsBridge::FImplementation::HandleParticipantConnected(
     void* Context,

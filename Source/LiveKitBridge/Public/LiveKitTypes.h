@@ -151,3 +151,13 @@ struct LIVEKITBRIDGE_API FLiveKitError
 
     bool IsSet() const { return !Code.IsEmpty() || !Message.IsEmpty(); }
 };
+
+/** Decoded remote PCM. The callback owns a copy of this frame. */
+struct LIVEKITBRIDGE_API FLiveKitAudioFrame
+{
+    TArray<int16> Samples;
+    int32 SampleRate = 0;
+    int32 Channels = 0;
+    uint64 SampleIndex = 0;
+    bool bDiscontinuity = false;
+};

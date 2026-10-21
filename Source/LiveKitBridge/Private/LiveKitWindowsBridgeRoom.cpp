@@ -4,7 +4,7 @@
 
 using namespace LiveKitWindowsBridgeInternal;
 
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
 
 uint64 FLiveKitWindowsBridge::FImplementation::BeginConnectionRequest()
 {
@@ -251,7 +251,7 @@ void FLiveKitWindowsBridge::Connect(
         StateHandler(ELiveKitConnectionState::Failed);
         return;
     }
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
     const uint64 ConnectionGeneration = Implementation->BeginConnectionRequest();
     StateHandler(ELiveKitConnectionState::Connecting);
     const bool bDispatched = DispatchControl([
@@ -322,6 +322,20 @@ void FLiveKitWindowsBridge::Connect(
             }
             Bridge.Implementation->SetRoom(Room, ConnectionGeneration);
 
+#if WITH_LIVEKIT_LINUX
+            if (!Bridge.AudioParticipant.IsEmpty())
+            {
+                const auto Participant = ToAdapterString(Bridge.AudioParticipant);
+                const auto Track = ToAdapterString(Bridge.AudioTrackName);
+                if (lkub_room_configure_audio_receiver(Room, ToAdapterView(Participant), ToAdapterView(Track), &Result) != LKUB_STATUS_OK)
+                {
+                    Bridge.ErrorHandler(AdapterError(TEXT("audio_receiver_failed"), Result));
+                    CleanupRoom();
+                    Bridge.StateHandler(ELiveKitConnectionState::Failed);
+                    return;
+                }
+            }
+#endif
             Result = {};
             if (lkub_room_prepare_audio(Room, &Result) != LKUB_STATUS_OK)
             {
@@ -419,7 +433,7 @@ void FLiveKitWindowsBridge::Disconnect()
         StateHandler(ELiveKitConnectionState::Disconnected);
         return;
     }
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
     const uint64 DisconnectGeneration = Implementation->InvalidateConnectionRequest();
     StateHandler(ELiveKitConnectionState::Disconnecting);
     const bool bDispatched = DispatchControl([DisconnectGeneration](
@@ -457,7 +471,7 @@ void FLiveKitWindowsBridge::SetMicrophoneEnabled(bool bEnabled)
     }
     DispatchControl([bEnabled](FLiveKitWindowsBridge& Bridge)
     {
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
         LKUB_Room* Room = Bridge.Implementation->GetRoom();
         if (Room == nullptr)
         {
@@ -495,7 +509,7 @@ void FLiveKitWindowsBridge::PublishData(
     DispatchControl([OperationId, Data, Topic, Reliability, DestinationIdentities](
         FLiveKitWindowsBridge& Bridge)
     {
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
         LKUB_Room* Room = Bridge.Implementation->GetRoom();
         if (Room == nullptr)
         {

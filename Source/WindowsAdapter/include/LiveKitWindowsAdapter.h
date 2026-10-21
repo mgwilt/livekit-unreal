@@ -20,7 +20,7 @@
 #  endif
 #else
 #  define LKUB_CALL
-#  define LKUB_API
+#  define LKUB_API __attribute__((visibility("default")))
 #endif
 
 #ifdef __cplusplus
@@ -344,6 +344,23 @@ LKUB_API int32_t LKUB_CALL lkub_room_perform_rpc(
     double response_timeout_seconds,
     LKUB_OwnedBuffer* out_response,
     LKUB_Result* out_result);
+
+
+/* PCM buffers belong to the adapter. Release pcm with lkub_buffer_release. */
+typedef struct LKUB_AudioFrame
+{
+    LKUB_OwnedBuffer pcm;
+    uint32_t sample_rate;
+    uint32_t channels;
+    uint64_t sample_index;
+    uint8_t discontinuity;
+} LKUB_AudioFrame;
+
+LKUB_API int32_t LKUB_CALL lkub_room_configure_audio_receiver(
+    LKUB_Room* room, LKUB_StringView participant, LKUB_StringView track_name, LKUB_Result* result);
+/* Returns 1 for a frame, 0 for an empty queue, and -1 for an error. */
+LKUB_API int32_t LKUB_CALL lkub_room_poll_audio(
+    LKUB_Room* room, LKUB_AudioFrame* frame, LKUB_Result* result);
 
 #ifdef __cplusplus
 } /* extern "C" */

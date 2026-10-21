@@ -1,6 +1,6 @@
 # Third-Party Notices and Release Gate
 
-LiveKit for Unreal downloads the following pinned dependencies for its Apple and Windows builds. The corresponding source repositories and known license texts are listed here.
+LiveKit for Unreal downloads the following pinned dependencies for its Apple, Windows, and experimental Linux builds. The corresponding source repositories and known license texts are listed here.
 
 The machine-readable companion inventory is `THIRD_PARTY_COMPONENTS.json`. It distinguishes runtime dependencies from build-only tools and records whether binary redistribution has enough upstream provenance to pass this project's release policy.
 
@@ -125,3 +125,17 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 - Reopening the binary gate requires updating `THIRD_PARTY_COMPONENTS.json`, preserving every applicable license and notice in the archive, running `Scripts/verify-release-compliance.sh binary`, and recording human review of the generated inventory.
 
 This is an engineering attribution record, not legal advice.
+
+## LiveKit C++ SDK for Linux x64
+
+- Version: 1.3.0
+- Source: <https://github.com/livekit/client-sdk-cpp/tree/v1.3.0>
+- Artifact: `livekit-sdk-linux-x64-1.3.0.tar.gz`
+- SHA-256: `4bf67a5dbb8dbcd44cb429f42e2025a6698a5c9e24ff3d472ef5dd95ff4319d4`
+- License: Apache License 2.0, reproduced in `LICENSE`
+- Runtime libraries: `liblivekit.so` and `liblivekit_ffi.so`
+
+The local build compiles `libLiveKitUnrealAdapter.so` from tracked source.
+The Linux archive has the same pending transitive inventory review as the Windows archive.
+Local source testing does not authorize binary redistribution.
+The binary release gate remains blocked in `THIRD_PARTY_COMPONENTS.json`.

@@ -3,7 +3,7 @@
   "release_policy": {
     "source_publication": "approved",
     "binary_redistribution": "blocked",
-    "binary_blocker": "RustLiveKitUniFFI 0.0.6 lacks reproducible transitive provenance, and the LiveKit C++ SDK 1.3.0 Windows archive lacks a complete reviewed transitive license inventory for the redistributed binaries."
+    "binary_blocker": "RustLiveKitUniFFI 0.0.6 lacks reproducible transitive provenance, and the LiveKit C++ SDK 1.3.0 Windows archive lacks a complete reviewed transitive license inventory for the redistributed binaries. The Linux C++ SDK archive also requires a complete reviewed transitive inventory."
   },
   "components": [
     {
@@ -22,6 +22,18 @@
       "artifact_source": "https://github.com/livekit/client-sdk-cpp/releases/tag/v1.3.0",
       "artifact": "livekit-sdk-windows-x64-1.3.0.zip",
       "artifact_sha256": "27a8707348d7fb094023b7c8af29e26b8e4085a4dab75d26be3968f29b2269c3",
+      "license": "Apache-2.0",
+      "runtime": true,
+      "transitive_inventory": "pending-review",
+      "binary_redistribution_approved": false
+    },
+    {
+      "name": "LiveKit C++ SDK for Linux x64",
+      "version": "1.3.0",
+      "source": "https://github.com/livekit/client-sdk-cpp/tree/v1.3.0",
+      "artifact_source": "https://github.com/livekit/client-sdk-cpp/releases/tag/v1.3.0",
+      "artifact": "livekit-sdk-linux-x64-1.3.0.tar.gz",
+      "artifact_sha256": "4bf67a5dbb8dbcd44cb429f42e2025a6698a5c9e24ff3d472ef5dd95ff4319d4",
       "license": "Apache-2.0",
       "runtime": true,
       "transitive_inventory": "pending-review",

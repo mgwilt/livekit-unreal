@@ -5,7 +5,7 @@
 /** True only when the Win64 adapter and SDK DLLs loaded and initialized. */
 bool IsLiveKitWindowsSdkInitialized();
 
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
 class FLiveKitWindowsBridge;
 struct LKUB_Room;
 

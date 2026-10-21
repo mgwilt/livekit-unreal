@@ -118,6 +118,7 @@ LKUB_ParticipantInfo LKUB_Room::ParticipantInfo(
 
 void LKUB_Room::ClearAudio()
 {
+    CloseAudioReceiver();
     std::lock_guard Lock(AudioMutex);
     MicrophoneTrack.reset();
     MicrophoneSource.reset();

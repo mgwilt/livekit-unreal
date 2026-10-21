@@ -2,7 +2,7 @@
 
 #if PLATFORM_MAC || PLATFORM_IOS
 #include "LiveKitAppleBridge.h"
-#elif PLATFORM_WINDOWS
+#elif PLATFORM_WINDOWS || PLATFORM_LINUX
 #include "LiveKitWindowsBridge.h"
 #endif
 
@@ -36,7 +36,7 @@ TSharedPtr<ILiveKitPlatformBridge> CreateLiveKitPlatformBridge(
         MoveTemp(PublishResultHandler));
     Bridge->ActivateLifetimeGate();
     return Bridge;
-#elif PLATFORM_WINDOWS
+#elif PLATFORM_WINDOWS || PLATFORM_LINUX
     TSharedPtr<FLiveKitWindowsBridge> Bridge = MakeShared<FLiveKitWindowsBridge>(
         MoveTemp(StateHandler),
         MoveTemp(ErrorHandler),

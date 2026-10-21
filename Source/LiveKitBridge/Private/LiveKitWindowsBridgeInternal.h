@@ -14,7 +14,7 @@
 #include <unordered_set>
 #include <vector>
 
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
 #include "LiveKitWindowsAdapter.h"
 
 namespace LiveKitWindowsBridgeInternal

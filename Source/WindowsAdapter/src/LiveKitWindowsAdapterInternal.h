@@ -6,6 +6,9 @@
 #include <livekit/livekit.h>
 
 #include <atomic>
+#include <deque>
+#include <thread>
+#include <livekit/audio_stream.h>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -94,6 +97,32 @@ struct LKUB_Room final : livekit::RoomDelegate
     std::shared_ptr<livekit::PlatformAudio> PlatformAudio;
     std::shared_ptr<livekit::PlatformAudioSource> MicrophoneSource;
     std::shared_ptr<livekit::LocalAudioTrack> MicrophoneTrack;
+
+    struct ReceivedAudio
+    {
+        livekit::AudioFrame Frame;
+        uint64_t SampleIndex = 0;
+        bool Discontinuity = false;
+    };
+    std::mutex ReceiverLifecycleMutex;
+    bool ReceiverClosed = false;
+    std::string ReceiveFailure;
+    std::mutex ReceiveMutex;
+    std::string AudioParticipant;
+    std::string AudioTrackName;
+    std::string AudioTrackSid;
+    bool ReceiveAudio = false;
+    std::shared_ptr<livekit::AudioStream> ReceiveStream;
+    std::thread ReceiveThread;
+    std::deque<ReceivedAudio> ReceivedFrames;
+    uint64_t ReceivedSampleIndex = 0;
+    bool AudioDiscontinuity = true;
+    void StopAudioReceiver();
+    void StopAudioReceiverLocked();
+    void CloseAudioReceiver();
+    void onTrackSubscribed(livekit::Room&, const livekit::TrackSubscribedEvent&) override;
+    void onTrackUnsubscribed(livekit::Room&, const livekit::TrackUnsubscribedEvent&) override;
+    void onTrackMuted(livekit::Room&, const livekit::TrackMutedEvent&) override;
 
     std::mutex SpeakerMutex;
     std::unordered_set<std::string> ActiveSpeakers;

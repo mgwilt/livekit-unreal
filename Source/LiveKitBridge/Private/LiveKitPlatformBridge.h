@@ -22,6 +22,12 @@ public:
         TFunction<void(const FString&, bool, const FString&, const FLiveKitError&)>;
     using FPublishResultHandler = TFunction<void(const FString&, bool, const FLiveKitError&)>;
 
+    using FAudioHandler = TFunction<void(const FLiveKitAudioFrame&)>;
+    virtual bool ConfigureAudioReceiver(const FString& Participant, const FString& TrackName, FAudioHandler Handler)
+    {
+        return false;
+    }
+
     virtual ~ILiveKitPlatformBridge() = default;
 
     virtual void Shutdown() = 0;

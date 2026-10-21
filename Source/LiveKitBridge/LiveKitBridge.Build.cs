@@ -125,6 +125,41 @@ public class LiveKitBridge : ModuleRules
 
         PublicDefinitions.Add("WITH_LIVEKIT_WINDOWS=" + (hasWindowsSdk ? "1" : "0"));
 
+        bool isLinux = Target.Platform == UnrealTargetPlatform.Linux;
+        string linuxRoot = Path.Combine(PluginDirectory, "Source", "ThirdParty", "Linux");
+        string linuxSdk = Path.Combine(linuxRoot, "SDK");
+        string linuxAdapter = Path.Combine(linuxSdk, "lib", "libLiveKitUnrealAdapter.so");
+        ExternalDependencies.Add(Path.Combine(linuxRoot, "dependencies.lock"));
+        ExternalDependencies.Add(Path.Combine(linuxSdk, ".verified.sha256"));
+        ExternalDependencies.Add(Path.Combine(linuxSdk, ".adapter-source.sha256"));
+        if (isLinux)
+        {
+            foreach (string source in Directory.GetFiles(windowsAdapterRoot, "*", SearchOption.AllDirectories))
+            {
+                if (IsAdapterSourceExtension(Path.GetExtension(source)) || source.EndsWith(".map"))
+                    ExternalDependencies.Add(source);
+            }
+        }
+        bool hasLinuxSdk = isLinux && isInternalBuild && File.Exists(linuxAdapter) &&
+            VerifyLinuxManifest(linuxSdk, Path.Combine(linuxSdk, ".verified.sha256")) &&
+            VerifyLinuxManifest(PluginDirectory, Path.Combine(linuxSdk, ".adapter-source.sha256"));
+        PublicDefinitions.Add("WITH_LIVEKIT_LINUX=" + (hasLinuxSdk ? "1" : "0"));
+        if (isLinux && !hasLinuxSdk)
+        {
+            throw new BuildException("Run vendor/livekit-unreal/Scripts/fetch-livekit-linux.sh before building Linux Development.");
+        }
+        if (hasLinuxSdk)
+        {
+            bEnableExceptions = true;
+            PrivateIncludePaths.Add(windowsAdapterInclude);
+            PublicAdditionalLibraries.Add(linuxAdapter);
+            PublicRuntimeLibraryPaths.Add(Path.Combine(linuxSdk, "lib"));
+            foreach (string library in Directory.GetFiles(Path.Combine(linuxSdk, "lib"), "*.so"))
+            {
+                RuntimeDependencies.Add("$(BinaryOutputDir)/" + Path.GetFileName(library), library, StagedFileType.NonUFS);
+            }
+        }
+
         if (isApple)
         {
             bEnableObjCAutomaticReferenceCounting = true;
@@ -288,6 +323,22 @@ public class LiveKitBridge : ModuleRules
     private static bool IsReparsePoint(string path)
     {
         return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+    }
+
+    private static bool VerifyLinuxManifest(string root, string manifest)
+    {
+        if (!File.Exists(manifest)) return false;
+        string prefix = Path.GetFullPath(root) + Path.DirectorySeparatorChar;
+        string[] lines = File.ReadAllLines(manifest);
+        if (lines.Length == 0) return false;
+        foreach (string line in lines)
+        {
+            if (line.Length < 67 || line.Substring(64, 2) != "  ") return false;
+            string path = Path.GetFullPath(Path.Combine(root, line.Substring(66)));
+            if (!path.StartsWith(prefix, StringComparison.Ordinal) || !File.Exists(path) ||
+                HashFile(path) != line.Substring(0, 64)) return false;
+        }
+        return true;
     }
 
     private static bool HasVerifiedWindowsSdk(

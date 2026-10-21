@@ -6,6 +6,7 @@
 #include "LiveKitSubsystem.generated.h"
 
 class ILiveKitPlatformBridge;
+DECLARE_MULTICAST_DELEGATE_OneParam(FLiveKitPcmReceived, const FLiveKitAudioFrame&);
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FLiveKitConnectionStateChanged, ELiveKitConnectionState, State);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FLiveKitErrorEvent, const FLiveKitError&, Error);
@@ -55,6 +56,10 @@ class LIVEKITBRIDGE_API ULiveKitSubsystem : public UGameInstanceSubsystem
 public:
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
     virtual void Deinitialize() override;
+
+    /** Select one remote participant before Connect. Native frames arrive on the game thread. */
+    bool ConfigureAudioReceiver(const FString& Participant, const FString& TrackName = FString());
+    FLiveKitPcmReceived OnPcmReceived;
 
     UFUNCTION(BlueprintCallable, Category="LiveKit")
     void Connect(

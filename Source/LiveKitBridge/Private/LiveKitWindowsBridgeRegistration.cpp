@@ -2,7 +2,7 @@
 
 using namespace LiveKitWindowsBridgeInternal;
 
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
 
 bool FLiveKitWindowsBridge::FImplementation::IsByteStreamRegistrationCurrent(const std::string& Topic, uint64 Generation)
 {
@@ -207,7 +207,7 @@ bool FLiveKitWindowsBridge::RegisterByteStreamHandler(const FString& Topic)
     {
         return false;
     }
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
     const std::string AdapterTopic = ToAdapterString(Topic);
     uint64 RegistrationGeneration = 0;
     bool bShouldDispatch = false;
@@ -300,7 +300,7 @@ bool FLiveKitWindowsBridge::RegisterByteStreamHandler(const FString& Topic)
 
 void FLiveKitWindowsBridge::UnregisterByteStreamHandler(const FString& Topic)
 {
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
     const std::string AdapterTopic = ToAdapterString(Topic);
     {
         std::lock_guard Lock(Implementation->RegistrationMutex);
@@ -333,7 +333,7 @@ bool FLiveKitWindowsBridge::RegisterRpcMethod(const FString& Method)
     {
         return false;
     }
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
     const std::string AdapterMethod = ToAdapterString(Method);
     uint64 RegistrationGeneration = 0;
     bool bShouldDispatch = false;
@@ -426,7 +426,7 @@ bool FLiveKitWindowsBridge::RegisterRpcMethod(const FString& Method)
 
 void FLiveKitWindowsBridge::UnregisterRpcMethod(const FString& Method)
 {
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
     const std::string AdapterMethod = ToAdapterString(Method);
     {
         std::lock_guard Lock(Implementation->RegistrationMutex);

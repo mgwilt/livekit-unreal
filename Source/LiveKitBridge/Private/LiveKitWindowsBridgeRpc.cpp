@@ -4,7 +4,7 @@
 
 using namespace LiveKitWindowsBridgeInternal;
 
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
 
 bool FLiveKitWindowsBridge::FImplementation::TryAdmitPendingRpc(
     const std::string& RequestId,
@@ -277,7 +277,7 @@ void FLiveKitWindowsBridge::PerformRpc(
         ResponseTimeoutSeconds,
         MaxRoundTripLatencySeconds](FLiveKitWindowsBridge& Bridge)
     {
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
         LKUB_Room* Room = Bridge.Implementation->GetRoom();
         if (Room == nullptr)
         {
@@ -342,7 +342,7 @@ void FLiveKitWindowsBridge::CompleteRpcInvocation(
     const FString& RequestId,
     const FString& ResponsePayload)
 {
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
     Implementation->ResolvePendingRpc(
         RequestId,
         &ResponsePayload,
@@ -358,7 +358,7 @@ void FLiveKitWindowsBridge::FailRpcInvocation(
     const FString& Message,
     const FString& Data)
 {
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
     Implementation->ResolvePendingRpc(
         RequestId,
         nullptr,

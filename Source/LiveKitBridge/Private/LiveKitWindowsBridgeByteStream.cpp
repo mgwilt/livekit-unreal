@@ -5,7 +5,7 @@
 
 using namespace LiveKitWindowsBridgeInternal;
 
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
 
 bool FLiveKitWindowsBridge::FImplementation::TryTrackByteStreamReader(
     LKUB_ByteStreamReader* Reader,
@@ -337,7 +337,7 @@ void LKUB_CALL FLiveKitWindowsBridge::FImplementation::OnByteStream(
 bool FLiveKitWindowsBridge::DispatchByteStream(
     TFunction<void(FLiveKitWindowsBridge&)> Work)
 {
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
     if (!Implementation || !Implementation->TryStartTask(true))
     {
         return false;

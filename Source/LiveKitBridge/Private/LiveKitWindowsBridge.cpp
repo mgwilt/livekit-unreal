@@ -18,7 +18,7 @@ FLiveKitError MakeLiveKitError(
     return Error;
 }
 
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
 std::string ToAdapterString(const FString& Value)
 {
     FTCHARToUTF8 Converted(*Value);
@@ -98,7 +98,7 @@ FLiveKitParticipantInfo ToParticipantInfo(const LKUB_ParticipantInfo& Participan
 
 using namespace LiveKitWindowsBridgeInternal;
 
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
 
 bool FLiveKitWindowsBridge::FImplementation::TryStartTask(bool bByteStreamReader)
 {
@@ -250,15 +250,23 @@ FLiveKitWindowsBridge::FLiveKitWindowsBridge(
 
 void FLiveKitWindowsBridge::ActivateLifetimeGate()
 {
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
     Implementation->Owner = AsShared();
     RegisterLiveKitWindowsBridge(AsShared());
+#if WITH_LIVEKIT_LINUX
+    TWeakPtr<FLiveKitWindowsBridge, ESPMode::ThreadSafe> Weak = AsShared();
+    AudioTicker = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([Weak](float Delta)
+    {
+        const auto Self = Weak.Pin();
+        return Self ? Self->TickAudio(Delta) : false;
+    }));
+#endif
 #endif
 }
 
 bool FLiveKitWindowsBridge::IsSdkAvailable() const
 {
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
     return IsLiveKitWindowsSdkInitialized();
 #else
     return false;
@@ -275,7 +283,7 @@ void FLiveKitWindowsBridge::ReportUnavailable(const FString& Operation) const
 
 bool FLiveKitWindowsBridge::DispatchControl(TFunction<void(FLiveKitWindowsBridge&)> Work)
 {
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
     if (!Implementation || !Implementation->TryStartTask(false))
     {
         return false;
@@ -333,7 +341,7 @@ void FLiveKitWindowsBridge::Shutdown()
     {
         return;
     }
-#if WITH_LIVEKIT_WINDOWS
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
     if (!Implementation->BeginShutdown())
     {
         return;
@@ -342,6 +350,7 @@ void FLiveKitWindowsBridge::Shutdown()
     {
         Implementation->CompleteShutdown();
     };
+    FTSTicker::GetCoreTicker().RemoveTicker(AudioTicker);
     Implementation->StopAcceptingTasks();
     Implementation->InvalidateConnectionRequest();
     {

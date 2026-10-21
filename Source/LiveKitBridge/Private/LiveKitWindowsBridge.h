@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Containers/Ticker.h"
 #include "LiveKitPlatformBridge.h"
 
 class FLiveKitWindowsBridge final
@@ -21,6 +22,13 @@ public:
         FRpcInvocationHandler InRpcInvocationHandler,
         FRpcResultHandler InRpcResultHandler,
         FPublishResultHandler InPublishResultHandler);
+    virtual bool ConfigureAudioReceiver(const FString& Participant, const FString& TrackName, FAudioHandler Handler) override;
+    bool TickAudio(float DeltaTime);
+    FTSTicker::FDelegateHandle AudioTicker;
+    FString AudioParticipant;
+    FString AudioTrackName;
+    FAudioHandler AudioHandler;
+
     virtual ~FLiveKitWindowsBridge() override;
 
     /** Called by the factory after MakeShared so tasks can pin this object. */
@@ -28,7 +36,7 @@ public:
 
     virtual void Shutdown() override;
     virtual bool IsSdkAvailable() const override;
-    virtual FString GetBackendName() const override { return TEXT("Windows"); }
+    virtual FString GetBackendName() const override { return PLATFORM_LINUX ? TEXT("Linux") : TEXT("Windows"); }
     virtual void Connect(
         const FString& ServerUrl,
         const FString& Token,

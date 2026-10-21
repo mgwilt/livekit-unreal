@@ -128,3 +128,33 @@ Generate participant tokens on a trusted server and grant only the permissions e
 ## License
 
 The plugin is licensed under Apache License 2.0. LiveKit and its transitive dependencies retain their own licenses and notices.
+
+## Experimental Linux PCM receiver
+
+This source extension adds Linux x64 support for internal Development builds.
+It uses the pinned LiveKit C++ SDK 1.3.0 Linux archive.
+Run `Scripts/fetch-livekit-linux.sh` before the Unreal build.
+The script requires `g++`, `curl`, `tar`, and SHA-256 tools.
+It checks the download and installed SDK before compiling the C adapter.
+Unreal Build Tool also checks the installed files and adapter source hashes.
+Generated SDK files stay outside version control.
+
+The Linux adapter reuses the portable C interface in `Source/WindowsAdapter`.
+The directory retains its existing name to limit changes to the Windows build.
+Unreal uses libc++. The adapter uses libstdc++ and owns all SDK objects.
+Only C types and copied PCM cross this boundary.
+
+Before connecting, call `ULiveKitSubsystem::ConfigureAudioReceiver` with the participant identity and optional track name.
+The native `OnPcmReceived` delegate supplies interleaved signed 16-bit samples on the game thread.
+Each frame includes sample rate, channel count, sample index, and a discontinuity flag.
+The receiver queue holds at most 200 ms of audio.
+A track replacement closes the old stream and joins its reader before creating another reader.
+Room shutdown closes the receiver before destroying the SDK room.
+The Linux receiver does not open microphone or automatic speaker devices.
+Existing Apple and Windows playback paths remain unchanged unless a future implementation enables raw receive mode.
+
+The Linux extension was compiled and exercised with UE 5.8.3 on Linux x64.
+The test streamed a 30-second mono fixture through a loopback LiveKit server and replaced the track once.
+Windows and Apple regression builds were not run for this extension.
+Linux packaged builds and network reconnection remain unverified.
+Shipping and Test builds remain blocked. Binary redistribution remains blocked by the release policy.

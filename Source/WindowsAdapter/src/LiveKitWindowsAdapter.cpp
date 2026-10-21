@@ -139,7 +139,7 @@ int32_t LKUB_CALL lkub_room_prepare_audio(
     {
         Require(Room != nullptr, "The room is required.");
         std::lock_guard Lock(Room->AudioMutex);
-        if (!Room->PlatformAudio)
+        if (!Room->ReceiveAudio && !Room->PlatformAudio)
         {
             Room->PlatformAudio = std::make_shared<livekit::PlatformAudio>();
         }

@@ -494,3 +494,15 @@ void ULiveKitSubsystem::ReceiveRpcInvocationForTesting(const FLiveKitRpcInvocati
     OnRpcInvocation.Broadcast(Invocation);
 }
 #endif
+
+bool ULiveKitSubsystem::ConfigureAudioReceiver(const FString& Participant, const FString& TrackName)
+{
+    if (!Bridge || Participant.IsEmpty() || ConnectionState != ELiveKitConnectionState::Disconnected)
+        return false;
+    TWeakObjectPtr<ULiveKitSubsystem> WeakThis(this);
+    return Bridge->ConfigureAudioReceiver(Participant, TrackName, [WeakThis](const FLiveKitAudioFrame& Frame)
+    {
+        check(IsInGameThread());
+        if (WeakThis.IsValid()) WeakThis->OnPcmReceived.Broadcast(Frame);
+    });
+}
