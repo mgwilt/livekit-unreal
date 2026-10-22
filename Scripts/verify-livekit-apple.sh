@@ -18,7 +18,9 @@ test -s "$DEST/Headers/LiveKitUnrealFacade-Swift-iOS.h"
 test -s "$DEST/Facade/Mac/libLiveKitUnrealFacade.a"
 test -s "$DEST/Facade/IOS/libLiveKitUnrealFacade.a"
 
-lipo "$DEST/Facade/Mac/libLiveKitUnrealFacade.a" -verify_arch arm64 x86_64
+for architecture in arm64 x86_64; do
+  lipo "$DEST/Facade/Mac/libLiveKitUnrealFacade.a" -verify_arch "$architecture"
+done
 lipo "$DEST/Facade/IOS/libLiveKitUnrealFacade.a" -verify_arch arm64
 
 printf 'LiveKit Apple dependencies and Unreal facade verified\n'
