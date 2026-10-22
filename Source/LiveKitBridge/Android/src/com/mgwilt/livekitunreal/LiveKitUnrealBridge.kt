@@ -73,7 +73,7 @@ class LiveKitUnrealBridge(private val activity: Activity, private val handle: Lo
     init { instances.add(this) }
 
     fun configuration(): String = try {
-        val file = File(activity.filesDir, "embi-livekit.json")
+        val file = File(activity.filesDir, "LiveKit.local.json")
         if (file.length() in 1..32768) file.readText() else ""
     } catch (_: Exception) { "" }
 

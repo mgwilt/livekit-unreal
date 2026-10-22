@@ -35,7 +35,7 @@ bool FLiveKitWindowsBridge::PublishVideoFrame(const FLiveKitVideoFrame& Frame)
             Self.ErrorHandler(AdapterError(TEXT("video_frame_failed"), Result));
         LKUB_VideoStats Stats{};
         if (Room && lkub_video_stats(Room, &Stats, &Result) == 1)
-            UE_LOG(LogTemp, Display, TEXT("Embi encoder: name=%s fps=%.1f frames=%u bytes=%llu encode_ms=%.2f limit=%d"),
+            UE_LOG(LogTemp, Display, TEXT("LiveKit encoder: name=%s fps=%.1f frames=%u bytes=%llu encode_ms=%.2f limit=%d"),
                 UTF8_TO_TCHAR(Stats.encoder), Stats.fps, Stats.frames_encoded, Stats.bytes_sent,
                 Stats.frames_encoded ? Stats.encode_seconds * 1000 / Stats.frames_encoded : 0, Stats.quality_reason);
         Self.VideoPending.Store(false);

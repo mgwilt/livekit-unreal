@@ -125,6 +125,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and [THIRD_P
 
 Generate participant tokens on a trusted server and grant only the permissions each client needs. See [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
+Mobile clients can read connection configuration from `LiveKit.local.json` in private application storage.
+Use the Android files directory or the Apple Documents directory.
+The JSON object requires nonempty `url`, `token`, and `participant` strings.
+Keep migration support for older application configuration files in the consuming project.
+
 ## License
 
 The plugin is licensed under Apache License 2.0. LiveKit and its transitive dependencies retain their own licenses and notices.
@@ -132,7 +137,7 @@ The plugin is licensed under Apache License 2.0. LiveKit and its transitive depe
 ## Experimental Linux PCM receiver
 
 This source extension adds Linux x64 support for internal Development builds.
-It uses the pinned LiveKit C++ SDK 1.3.0 Linux archive.
+It uses the pinned LiveKit C++ SDK 1.12.3 Linux archive.
 Run `Scripts/fetch-livekit-linux.sh` before the Unreal build.
 The script requires `g++`, `curl`, `tar`, and SHA-256 tools.
 It checks the download and installed SDK before compiling the C adapter.

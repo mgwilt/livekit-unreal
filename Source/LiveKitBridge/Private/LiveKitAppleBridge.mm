@@ -506,7 +506,7 @@ bool FLiveKitAppleBridge::ReadConnectionConfiguration(FString& Url, FString& Tok
 {
 #if WITH_LIVEKIT_APPLE
     NSString* Documents = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-    NSData* Data = [NSData dataWithContentsOfFile:[Documents stringByAppendingPathComponent:@"embi-livekit.json"]];
+    NSData* Data = [NSData dataWithContentsOfFile:[Documents stringByAppendingPathComponent:@"LiveKit.local.json"]];
     if (!Data) return false;
     id Value = [NSJSONSerialization JSONObjectWithData:Data options:0 error:nil];
     if (![Value isKindOfClass:[NSDictionary class]]) return false;
