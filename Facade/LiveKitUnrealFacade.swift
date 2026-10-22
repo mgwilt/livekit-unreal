@@ -1,5 +1,37 @@
 import Foundation
 import LiveKit
+import CoreImage
+
+@objc(LiveKitUnrealVideoReceiver)
+public final class LiveKitUnrealVideoReceiver: NSObject, VideoRenderer, @unchecked Sendable {
+    public typealias FrameHandler = @Sendable (Data, Int, Int, Int64) -> Void
+    private let context = CIContext(options: [.cacheIntermediates: false])
+    private let handler: FrameHandler
+
+    @objc(initWithHandler:)
+    public init(handler: @escaping FrameHandler) {
+        self.handler = handler
+        super.init()
+    }
+
+    @MainActor public var isAdaptiveStreamEnabled: Bool { false }
+    @MainActor public var adaptiveStreamSize: CGSize { .zero }
+
+    public func render(frame: VideoFrame) {
+        guard let buffer = frame.toCVPixelBuffer() else { return }
+        let width = CVPixelBufferGetWidth(buffer)
+        let height = CVPixelBufferGetHeight(buffer)
+        guard width > 0, height > 0, width <= 3840, height <= 3840 else { return }
+        var bytes = Data(count: width * height * 4)
+        bytes.withUnsafeMutableBytes { memory in
+            guard let base = memory.baseAddress else { return }
+            context.render(CIImage(cvPixelBuffer: buffer), toBitmap: base,
+                           rowBytes: width * 4, bounds: CGRect(x: 0, y: 0, width: width, height: height),
+                           format: .BGRA8, colorSpace: CGColorSpaceCreateDeviceRGB())
+        }
+        handler(bytes, width, height, frame.timeStampNs / 1000)
+    }
+}
 
 private actor LiveKitUnrealPendingRpcStore {
     private var pending: [String: CheckedContinuation<String, Error>] = [:]

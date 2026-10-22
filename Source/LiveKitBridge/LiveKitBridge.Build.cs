@@ -21,6 +21,13 @@ public class LiveKitBridge : ModuleRules
             "Engine"
         });
 
+        if (Target.Platform == UnrealTargetPlatform.Android)
+        {
+            PrivateDependencyModuleNames.AddRange(new[] { "Launch", "ApplicationCore", "Json" });
+            AdditionalPropertiesForReceipt.Add("AndroidPlugin",
+                Path.Combine(ModuleDirectory, "Android", "LiveKitAndroid_UPL.xml"));
+        }
+
         bool isApple = Target.Platform == UnrealTargetPlatform.Mac || Target.Platform == UnrealTargetPlatform.IOS;
         string appleRoot = Path.GetFullPath(Path.Combine(ModuleDirectory, "..", "ThirdParty", "Apple"));
         string liveKit = Path.Combine(appleRoot, "LiveKit.xcframework.zip");
@@ -170,6 +177,7 @@ public class LiveKitBridge : ModuleRules
                 "AVFoundation",
                 "AudioToolbox",
                 "CoreMedia",
+                "CoreImage",
                 "CoreVideo",
                 "Foundation",
                 "Network",

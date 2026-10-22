@@ -17,6 +17,7 @@ bool FLiveKitWindowsBridge::ConfigureAudioReceiver(
 bool FLiveKitWindowsBridge::TickAudio(float)
 {
 #if WITH_LIVEKIT_LINUX
+    TickVideo();
     if (!AudioHandler || !Implementation) return true;
     if (Implementation->bCaptureFailed.exchange(false, std::memory_order_acq_rel))
     {

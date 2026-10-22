@@ -2,6 +2,8 @@
 
 #if PLATFORM_MAC || PLATFORM_IOS
 #include "LiveKitAppleBridge.h"
+#elif PLATFORM_ANDROID
+#include "LiveKitAndroidBridge.h"
 #elif PLATFORM_WINDOWS || PLATFORM_LINUX
 #include "LiveKitWindowsBridge.h"
 #endif
@@ -50,6 +52,12 @@ TSharedPtr<ILiveKitPlatformBridge> CreateLiveKitPlatformBridge(
         MoveTemp(RpcInvocationHandler),
         MoveTemp(RpcResultHandler),
         MoveTemp(PublishResultHandler));
+    Bridge->ActivateLifetimeGate();
+    return Bridge;
+#elif PLATFORM_ANDROID
+    auto Bridge = MakeShared<FLiveKitAndroidBridge>(MoveTemp(StateHandler), MoveTemp(ErrorHandler),
+        MoveTemp(ParticipantConnectedHandler), MoveTemp(ParticipantDisconnectedHandler),
+        MoveTemp(DataHandler), MoveTemp(PublishResultHandler), MoveTemp(RpcResultHandler));
     Bridge->ActivateLifetimeGate();
     return Bridge;
 #else

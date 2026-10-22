@@ -8,7 +8,7 @@ if [[ "$(uname -m)" != x86_64 ]]; then
     exit 1
 fi
 archive="$dep_root/$LIVEKIT_CPP_ARCHIVE.download"
-if [[ ! -f "$dep_root/SDK/.upstream.sha256" ]]; then
+if [[ ! -f "$dep_root/SDK/.upstream.sha256" ]] || [[ "$(cat "$dep_root/SDK/.archive.sha256" 2>/dev/null || true)" != "$LIVEKIT_CPP_SHA256" ]]; then
     curl -fL --retry 2 "$LIVEKIT_CPP_URL" -o "$archive"
     printf '%s  %s\n' "$LIVEKIT_CPP_SHA256" "$archive" | sha256sum --check --status
     stage="$(mktemp -d "$dep_root/.extract.XXXXXX")"
@@ -31,7 +31,7 @@ adapter_root="$plugin_root/Source/WindowsAdapter"
 # Only the C interface crosses the standard-library boundary.
 g++ -std=c++20 -shared -fPIC -pthread -O2 -fvisibility=hidden \
     -I"$adapter_root/include" -I"$dep_root/SDK/include" \
-    "$adapter_root"/src/*.cpp \
+    "$adapter_root"/src/*.cpp "$adapter_root"/src/Media/*.cpp \
     -L"$dep_root/SDK/lib" -llivekit \
     -Wl,-rpath,'$ORIGIN' -Wl,-soname,libLiveKitUnrealAdapter.so \
     -Wl,--version-script="$adapter_root/exports.map" \

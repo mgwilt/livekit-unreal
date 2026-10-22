@@ -189,6 +189,14 @@ namespace
     }
 }
 
+- (void)room:(Room*)room participant:(RemoteParticipant*)participant didSubscribeTrack:(RemoteTrackPublication*)publication
+{
+    if (FSharedLiveKitBridge Bridge = Owner.Pin())
+    {
+        Bridge->ConfigureRemoteTrack((__bridge void*)participant, (__bridge void*)publication);
+    }
+}
+
 - (void)room:(Room*)room didUpdateSpeakingParticipants:(NSArray<Participant*>*)participants
 {
     FSharedLiveKitBridge Bridge = Owner.Pin();
@@ -239,7 +247,9 @@ struct FLiveKitAppleBridge::FImplementation
     Room* RoomInstance = nil;
     LiveKitUnrealRoomDelegate* Delegate = nil;
     LiveKitUnrealSwiftFacade* SwiftFacade = nil;
-    uint64 RoomGeneration = 0;
+    LiveKitUnrealVideoReceiver* VideoReceiver = nil;
+    RemoteVideoTrack* VideoTrackInstance = nil;
+    TAtomic<uint64> RoomGeneration{0};
     TSet<FString> RegisteredByteStreamTopics;
     TSet<FString> RegisteredRpcMethods;
     TAtomic<bool> bManualDisconnectInProgress{false};
@@ -287,6 +297,8 @@ FLiveKitAppleBridge::~FLiveKitAppleBridge()
 
 void FLiveKitAppleBridge::Shutdown()
 {
+    bMicrophoneCapturing.Store(false);
+    ++MicrophoneRequest;
 #if WITH_LIVEKIT_APPLE
     if (!Implementation || Implementation->bShuttingDown.Exchange(true))
     {
@@ -294,6 +306,9 @@ void FLiveKitAppleBridge::Shutdown()
     }
 
     Implementation->Delegate->Owner.Reset();
+    [Implementation->VideoTrackInstance removeVideoRenderer:Implementation->VideoReceiver];
+    Implementation->VideoTrackInstance = nil;
+    Implementation->VideoReceiver = nil;
     [Implementation->SwiftFacade shutdown];
     Implementation->SwiftFacade = nil;
 
@@ -325,6 +340,8 @@ void FLiveKitAppleBridge::CreateRoom()
     }
 
     [Implementation->SwiftFacade shutdown];
+    [Implementation->VideoTrackInstance removeVideoRenderer:Implementation->VideoReceiver];
+    Implementation->VideoTrackInstance = nil;
     Implementation->SwiftFacade = nil;
     ++Implementation->RoomGeneration;
     Implementation->RoomInstance = [[Room alloc]
@@ -397,7 +414,7 @@ void FLiveKitAppleBridge::Connect(
             {
                 if (FSharedLiveKitBridge GameThreadBridge = WeakBridge.Pin())
                 {
-                    GameThreadBridge->SetMicrophoneEnabled(bEnableMicrophone);
+                    if (bEnableMicrophone) GameThreadBridge->SetMicrophoneEnabled(true);
                 }
             });
         }];
@@ -412,6 +429,8 @@ void FLiveKitAppleBridge::Connect(
 
 void FLiveKitAppleBridge::Disconnect()
 {
+    bMicrophoneCapturing.Store(false);
+    ++MicrophoneRequest;
 #if WITH_LIVEKIT_APPLE
     if (Implementation->bShuttingDown.Load() ||
         Implementation->bManualDisconnectInProgress.Exchange(true))
@@ -448,6 +467,11 @@ void FLiveKitAppleBridge::Disconnect()
 void FLiveKitAppleBridge::SetMicrophoneEnabled(bool bEnabled)
 {
 #if WITH_LIVEKIT_APPLE
+    if (bEnabled && (Implementation->bManualDisconnectInProgress.Load() ||
+        Implementation->bShuttingDown.Load() || !Implementation->RoomInstance ||
+        Implementation->RoomInstance.connectionState != ConnectionStateConnected)) return;
+    const uint64 Request = ++MicrophoneRequest;
+    const uint64 Generation = Implementation->RoomGeneration.Load();
     FWeakLiveKitBridge WeakBridge = AsShared();
     [Implementation->RoomInstance.localParticipant
         setMicrophoneWithEnabled:bEnabled
@@ -455,11 +479,109 @@ void FLiveKitAppleBridge::SetMicrophoneEnabled(bool bEnabled)
         publishOptions:nil
         completionHandler:^(LocalTrackPublication* publication, NSError* error)
         {
-            if (FSharedLiveKitBridge Bridge = WeakBridge.Pin(); Bridge && error)
+            FSharedLiveKitBridge Bridge = WeakBridge.Pin();
+            if (!Bridge || Bridge->MicrophoneRequest.Load() != Request ||
+                Bridge->Implementation->RoomGeneration.Load() != Generation ||
+                Bridge->Implementation->bManualDisconnectInProgress.Load() ||
+                Bridge->Implementation->bShuttingDown.Load()) return;
+            if (error)
             {
                 Bridge->NotifyError(MakeLiveKitError(TEXT("microphone_failed"), error));
             }
+            else
+            {
+                Bridge->bMicrophoneCapturing.Store(bEnabled);
+                UE_LOG(LogTemp, Display, TEXT("LiveKit Apple: microphone %s"), bEnabled ? TEXT("on") : TEXT("off"));
+            }
         }];
+#endif
+}
+
+bool FLiveKitAppleBridge::IsMicrophoneCapturing() const
+{
+    return bMicrophoneCapturing.Load();
+}
+
+bool FLiveKitAppleBridge::ReadConnectionConfiguration(FString& Url, FString& Token, FString& Participant)
+{
+#if WITH_LIVEKIT_APPLE
+    NSString* Documents = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    NSData* Data = [NSData dataWithContentsOfFile:[Documents stringByAppendingPathComponent:@"embi-livekit.json"]];
+    if (!Data) return false;
+    id Value = [NSJSONSerialization JSONObjectWithData:Data options:0 error:nil];
+    if (![Value isKindOfClass:[NSDictionary class]]) return false;
+    NSDictionary* Configuration = Value;
+    for (NSString* Key in @[@"url", @"token", @"participant"])
+        if (![Configuration[Key] isKindOfClass:[NSString class]] || [Configuration[Key] length] == 0) return false;
+    Url = FromNSString(Configuration[@"url"]);
+    Token = FromNSString(Configuration[@"token"]);
+    Participant = FromNSString(Configuration[@"participant"]);
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool FLiveKitAppleBridge::ConfigureAudioReceiver(const FString& Participant, const FString& Track, FAudioHandler)
+{
+    // Apple plays the selected track through its native audio session.
+    AudioParticipant = Participant;
+    AudioTrack = Track;
+    return IsSdkAvailable();
+}
+
+bool FLiveKitAppleBridge::ConfigureVideoReceiver(const FString& Participant, const FString& Track, FVideoHandler Handler)
+{
+    VideoParticipant = Participant;
+    VideoTrack = Track;
+    VideoHandler = MoveTemp(Handler);
+#if WITH_LIVEKIT_APPLE
+    FWeakLiveKitBridge WeakBridge = AsShared();
+    Implementation->VideoReceiver = [[LiveKitUnrealVideoReceiver alloc] initWithHandler:
+        ^(NSData* Bytes, NSInteger Width, NSInteger Height, int64_t Timestamp)
+        {
+            FSharedLiveKitBridge Bridge = WeakBridge.Pin();
+            if (!Bridge || Bridge->bVideoPending.Exchange(true)) return;
+            FLiveKitVideoFrame Frame;
+            Frame.Width = Width; Frame.Height = Height; Frame.TimestampMicroseconds = Timestamp;
+            Frame.Pixels.Append(static_cast<const uint8*>(Bytes.bytes), static_cast<int32>(Bytes.length));
+            const uint64 Generation = Bridge->Implementation->RoomGeneration.Load();
+            AsyncTask(ENamedThreads::GameThread, [WeakBridge, Generation, Frame = MoveTemp(Frame)]()
+            {
+                if (FSharedLiveKitBridge Current = WeakBridge.Pin())
+                {
+                    Current->bVideoPending.Store(false);
+                    if (Current->Implementation->RoomGeneration.Load() == Generation && Current->VideoHandler)
+                        Current->VideoHandler(Frame);
+                }
+            });
+        }];
+#endif
+    return IsSdkAvailable();
+}
+
+void FLiveKitAppleBridge::ConfigureRemoteTrack(void* ParticipantValue, void* PublicationValue)
+{
+#if WITH_LIVEKIT_APPLE
+    RemoteParticipant* Participant = (__bridge RemoteParticipant*)ParticipantValue;
+    RemoteTrackPublication* Publication = (__bridge RemoteTrackPublication*)PublicationValue;
+    const FString Identity = FromNSString(Participant.identity.stringValue);
+    const FString Name = FromNSString(Publication.name);
+    if ([Publication.track isKindOfClass:[RemoteAudioTrack class]])
+    {
+        RemoteAudioTrack* Track = (RemoteAudioTrack*)Publication.track;
+        Track.volume = Identity == AudioParticipant && Name == AudioTrack ? 1.0 : 0.0;
+        if (Track.volume > 0)
+            UE_LOG(LogTemp, Display, TEXT("LiveKit Apple: selected audio %s/%s"), *Identity, *Name);
+    }
+    if ([Publication.track isKindOfClass:[RemoteVideoTrack class]] &&
+        Identity == VideoParticipant && Name == VideoTrack && Implementation->VideoReceiver)
+    {
+        [Implementation->VideoTrackInstance removeVideoRenderer:Implementation->VideoReceiver];
+        Implementation->VideoTrackInstance = (RemoteVideoTrack*)Publication.track;
+        [Implementation->VideoTrackInstance addVideoRenderer:Implementation->VideoReceiver];
+        UE_LOG(LogTemp, Display, TEXT("LiveKit Apple: selected video %s/%s"), *Identity, *Name);
+    }
 #endif
 }
 
@@ -520,7 +642,7 @@ bool FLiveKitAppleBridge::RegisterByteStreamHandler(const FString& Topic)
     Implementation->RegisteredByteStreamTopics.Add(Topic);
     FWeakLiveKitBridge WeakBridge = AsShared();
     const FString RegisteredTopic = Topic;
-    const uint64 RegistrationGeneration = Implementation->RoomGeneration;
+    const uint64 RegistrationGeneration = Implementation->RoomGeneration.Load();
     [Implementation->SwiftFacade
         registerByteStreamHandler:ToNSString(Topic)
         maximumBytes:LiveKitLimits::MaxIncomingByteStreamBytes
@@ -580,7 +702,7 @@ bool FLiveKitAppleBridge::RegisterByteStreamHandler(const FString& Topic)
             {
                 if (FSharedLiveKitBridge Bridge = WeakBridge.Pin())
                 {
-                    if (Bridge->Implementation->RoomGeneration != RegistrationGeneration)
+                    if (Bridge->Implementation->RoomGeneration.Load() != RegistrationGeneration)
                     {
                         return;
                     }

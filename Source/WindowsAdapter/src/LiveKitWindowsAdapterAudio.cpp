@@ -33,6 +33,7 @@ void LKUB_Room::StopAudioReceiverLocked()
 
 void LKUB_Room::onTrackSubscribed(livekit::Room&, const livekit::TrackSubscribedEvent& Event)
 {
+    SubscribeVideo(Event);
     if (!ReceiveAudio || !Event.participant || !Event.track ||
         Event.track->kind() != livekit::TrackKind::KIND_AUDIO ||
         Event.participant->identity() != AudioParticipant ||
@@ -84,6 +85,10 @@ void LKUB_Room::onTrackSubscribed(livekit::Room&, const livekit::TrackSubscribed
 
 void LKUB_Room::onTrackUnsubscribed(livekit::Room&, const livekit::TrackUnsubscribedEvent& Event)
 {
+    {
+        std::lock_guard Lock(VideoLifecycleMutex);
+        if (Event.track && Event.track->sid() == VideoTrackSid) StopVideoLocked();
+    }
     std::lock_guard LifecycleLock(ReceiverLifecycleMutex);
     bool Matches = false;
     {

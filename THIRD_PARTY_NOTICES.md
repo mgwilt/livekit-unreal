@@ -128,10 +128,10 @@ This is an engineering attribution record, not legal advice.
 
 ## LiveKit C++ SDK for Linux x64
 
-- Version: 1.3.0
-- Source: <https://github.com/livekit/client-sdk-cpp/tree/v1.3.0>
-- Artifact: `livekit-sdk-linux-x64-1.3.0.tar.gz`
-- SHA-256: `4bf67a5dbb8dbcd44cb429f42e2025a6698a5c9e24ff3d472ef5dd95ff4319d4`
+- Version: 1.12.3
+- Source: <https://github.com/livekit/client-sdk-cpp/tree/v1.12.3>
+- Artifact: `livekit-sdk-ubuntu-22.04-x64-1.12.3.tar.gz`
+- SHA-256: `d515ff4808652412232809be11a30b8b89d1c40b66f31925b0132770f91b7a8f`
 - License: Apache License 2.0, reproduced in `LICENSE`
 - Runtime libraries: `liblivekit.so` and `liblivekit_ffi.so`
 
@@ -139,3 +139,16 @@ The local build compiles `libLiveKitUnrealAdapter.so` from tracked source.
 The Linux archive has the same pending transitive inventory review as the Windows archive.
 Local source testing does not authorize binary redistribution.
 The binary release gate remains blocked in `THIRD_PARTY_COMPONENTS.json`.
+
+## LiveKit Android SDK
+
+- Version: 2.28.0
+- Source: <https://github.com/livekit/client-sdk-android/tree/v2.28.0>
+- Maven coordinate: `io.livekit:livekit-android:2.28.0`
+- License: Apache License 2.0
+- Kotlin Gradle plugin: 1.9.25
+
+Gradle downloads the SDK and its dependencies for local Android builds.
+The Android adapter source is in `Source/LiveKitBridge/Android`.
+Android speaker playback belongs to Unreal. The SDK supplies PCM and mutes its speaker output.
+The existing binary release gate remains closed. This change supports local device testing.

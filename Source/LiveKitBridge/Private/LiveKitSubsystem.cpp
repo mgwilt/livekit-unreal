@@ -511,3 +511,8 @@ bool ULiveKitSubsystem::IsMicrophoneCapturing() const
 {
     return Bridge && Bridge->IsMicrophoneCapturing();
 }
+
+bool ULiveKitSubsystem::ReadConnectionConfiguration(FString& Url, FString& Token, FString& Participant) const
+{
+    return Bridge && Bridge->ReadConnectionConfiguration(Url, Token, Participant);
+}

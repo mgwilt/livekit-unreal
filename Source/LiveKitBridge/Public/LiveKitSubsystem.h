@@ -2,10 +2,12 @@
 
 #include "CoreMinimal.h"
 #include "LiveKitTypes.h"
+#include "LiveKitVideoTypes.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "LiveKitSubsystem.generated.h"
 
 class ILiveKitPlatformBridge;
+DECLARE_MULTICAST_DELEGATE_OneParam(FLiveKitVideoReceived, const FLiveKitVideoFrame&);
 DECLARE_MULTICAST_DELEGATE_OneParam(FLiveKitPcmReceived, const FLiveKitAudioFrame&);
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FLiveKitConnectionStateChanged, ELiveKitConnectionState, State);
@@ -60,6 +62,11 @@ public:
     /** Select one remote participant before Connect. Native frames arrive on the game thread. */
     bool ConfigureAudioReceiver(const FString& Participant, const FString& TrackName = FString());
     FLiveKitPcmReceived OnPcmReceived;
+    bool ConfigureVideoReceiver(const FString& Participant, const FString& TrackName);
+    bool StartVideoPublisher(int32 Width, int32 Height, int32 Fps, int32 Bitrate);
+    bool PublishVideoFrame(const FLiveKitVideoFrame& Frame);
+    bool PublishOutputAudio(const FLiveKitAudioFrame& Frame);
+    FLiveKitVideoReceived OnVideoReceived;
 
     UFUNCTION(BlueprintCallable, Category="LiveKit")
     void Connect(
@@ -85,6 +92,8 @@ public:
 
     UFUNCTION(BlueprintPure, Category="LiveKit")
     bool IsSdkAvailable() const;
+
+    bool ReadConnectionConfiguration(FString& Url, FString& Token, FString& Participant) const;
 
     UFUNCTION(BlueprintPure, Category="LiveKit|Participants")
     TArray<FLiveKitParticipantInfo> GetRemoteParticipants() const;

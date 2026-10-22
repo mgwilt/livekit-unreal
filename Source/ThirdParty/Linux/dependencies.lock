@@ -1,4 +1,4 @@
-LIVEKIT_CPP_VERSION=1.3.0
-LIVEKIT_CPP_ARCHIVE=livekit-sdk-linux-x64-1.3.0.tar.gz
-LIVEKIT_CPP_URL=https://github.com/livekit/client-sdk-cpp/releases/download/v1.3.0/livekit-sdk-linux-x64-1.3.0.tar.gz
-LIVEKIT_CPP_SHA256=4bf67a5dbb8dbcd44cb429f42e2025a6698a5c9e24ff3d472ef5dd95ff4319d4
+LIVEKIT_CPP_VERSION=1.12.3
+LIVEKIT_CPP_ARCHIVE=livekit-sdk-ubuntu-22.04-x64-1.12.3.tar.gz
+LIVEKIT_CPP_URL=https://github.com/livekit/client-sdk-cpp/releases/download/v1.12.3/livekit-sdk-ubuntu-22.04-x64-1.12.3.tar.gz
+LIVEKIT_CPP_SHA256=d515ff4808652412232809be11a30b8b89d1c40b66f31925b0132770f91b7a8f

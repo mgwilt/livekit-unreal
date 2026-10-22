@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "LiveKitTypes.h"
+#include "LiveKitVideoTypes.h"
 
 /** Internal platform adapter used by ULiveKitSubsystem. */
 class ILiveKitPlatformBridge
@@ -22,11 +23,19 @@ public:
         TFunction<void(const FString&, bool, const FString&, const FLiveKitError&)>;
     using FPublishResultHandler = TFunction<void(const FString&, bool, const FLiveKitError&)>;
 
+    using FVideoHandler = TFunction<void(const FLiveKitVideoFrame&)>;
+    virtual bool ConfigureVideoReceiver(const FString&, const FString&, FVideoHandler) { return false; }
+    virtual bool StartVideoPublisher(int32, int32, int32, int32) { return false; }
+    virtual bool PublishVideoFrame(const FLiveKitVideoFrame&) { return false; }
+    virtual bool PublishOutputAudio(const FLiveKitAudioFrame&) { return false; }
+
     using FAudioHandler = TFunction<void(const FLiveKitAudioFrame&)>;
     virtual bool ConfigureAudioReceiver(const FString& Participant, const FString& TrackName, FAudioHandler Handler)
     {
         return false;
     }
+
+    virtual bool ReadConnectionConfiguration(FString& Url, FString& Token, FString& Participant) { return false; }
 
     virtual ~ILiveKitPlatformBridge() = default;
 

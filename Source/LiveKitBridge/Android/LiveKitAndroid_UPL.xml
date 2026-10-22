@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root xmlns:android="http://schemas.android.com/apk/res/android">
+    <buildscriptGradleAdditions>
+        <insert>
+dependencies { classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.25' }
+        </insert>
+    </buildscriptGradleAdditions>
+    <baseBuildGradleAdditions>
+        <insert>
+allprojects { repositories { maven { url 'https://jitpack.io'; content { includeGroup 'com.github.davidliu' } } } }
+        </insert>
+    </baseBuildGradleAdditions>
+    <buildGradleAdditions>
+        <insert>
+apply plugin: 'org.jetbrains.kotlin.android'
+android { kotlinOptions { jvmTarget = '17' } }
+dependencies { implementation 'io.livekit:livekit-android:2.28.0' }
+        </insert>
+    </buildGradleAdditions>
+    <prebuildCopies>
+        <copyDir src="$S(PluginDir)/src" dst="$S(BuildDir)/src" />
+    </prebuildCopies>
+    <androidManifestUpdates>
+        <addPermission android:name="android.permission.RECORD_AUDIO" />
+        <addPermission android:name="android.permission.INTERNET" />
+        <addPermission android:name="android.permission.ACCESS_NETWORK_STATE" />
+        <addPermission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+        <addAttribute tag="application" name="android:usesCleartextTraffic" value="true" />
+    </androidManifestUpdates>
+    <proguardAdditions>
+        <insert>
+-keep class com.mgwilt.livekitunreal.** { *; }
+        </insert>
+    </proguardAdditions>
+    <gameActivityOnRequestPermissionsResultAdditions>
+        <insert>
+com.mgwilt.livekitunreal.LiveKitUnrealBridge.onPermissionsResult(requestCode, grantResults);
+        </insert>
+    </gameActivityOnRequestPermissionsResultAdditions>
+    <gameActivityOnStopAdditions>
+        <insert>
+com.mgwilt.livekitunreal.LiveKitUnrealBridge.onStop();
+        </insert>
+    </gameActivityOnStopAdditions>
+</root>

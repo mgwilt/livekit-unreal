@@ -17,7 +17,8 @@
     "Mac",
     "IOS",
     "Win64",
-    "Linux"
+    "Linux",
+    "Android"
   ],
   "Modules": [
     {
@@ -28,7 +29,8 @@
         "Mac",
         "IOS",
         "Win64",
-        "Linux"
+        "Linux",
+        "Android"
       ]
     }
   ]

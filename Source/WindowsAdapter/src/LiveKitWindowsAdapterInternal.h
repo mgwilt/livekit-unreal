@@ -9,6 +9,9 @@
 #include <deque>
 #include <thread>
 #include <livekit/audio_stream.h>
+#include <livekit/video_stream.h>
+#include <livekit/local_video_track.h>
+#include <optional>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -18,8 +21,13 @@
 #include <unordered_set>
 #include <utility>
 
+#if defined(__linux__)
+constexpr std::string_view ExpectedLiveKitVersion = "1.12.3";
+#else
+constexpr std::string_view ExpectedLiveKitVersion = "1.3.0";
+#endif
 static_assert(
-    std::string_view(LIVEKIT_BUILD_VERSION) == std::string_view("1.3.0"),
+    std::string_view(LIVEKIT_BUILD_VERSION) == ExpectedLiveKitVersion,
     "The adapter must be reviewed for every LiveKit C++ SDK version.");
 
 namespace lkub::internal
@@ -124,6 +132,27 @@ struct LKUB_Room final : livekit::RoomDelegate
     void onTrackSubscribed(livekit::Room&, const livekit::TrackSubscribedEvent&) override;
     void onTrackUnsubscribed(livekit::Room&, const livekit::TrackUnsubscribedEvent&) override;
     void onTrackMuted(livekit::Room&, const livekit::TrackMutedEvent&) override;
+
+    std::mutex VideoLifecycleMutex;
+    std::mutex VideoMutex;
+    bool VideoClosed = false;
+    std::string VideoParticipant, VideoTrackName, VideoTrackSid;
+    std::string VideoFailure;
+    std::shared_ptr<livekit::VideoStream> VideoStream;
+    std::thread VideoThread;
+    std::optional<livekit::VideoFrameEvent> LatestVideo;
+    std::mutex OutputMutex;
+    std::shared_ptr<livekit::VideoSource> VideoSource;
+    std::shared_ptr<livekit::LocalVideoTrack> VideoTrack;
+    std::shared_ptr<livekit::AudioSource> OutputAudio;
+    std::shared_ptr<livekit::LocalAudioTrack> OutputTrack;
+    int OutputWidth = 0, OutputHeight = 0, OutputRate = 0, OutputChannels = 0;
+    std::optional<std::future<std::vector<livekit::RtcStats>>> VideoStatsRequest;
+    std::chrono::steady_clock::time_point NextVideoStats{};
+    void SubscribeVideo(const livekit::TrackSubscribedEvent&);
+    void StopVideo();
+    void StopVideoLocked();
+    void ClearVideo();
 
     std::mutex SpeakerMutex;
     std::unordered_set<std::string> ActiveSpeakers;

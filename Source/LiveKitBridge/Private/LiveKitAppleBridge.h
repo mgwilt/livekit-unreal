@@ -37,6 +37,11 @@ public:
         bool bEnableVoiceProcessing) override;
     virtual void Disconnect() override;
     virtual void SetMicrophoneEnabled(bool bEnabled) override;
+    virtual bool IsMicrophoneCapturing() const override;
+    virtual bool ReadConnectionConfiguration(FString& Url, FString& Token, FString& Participant) override;
+    virtual bool ConfigureAudioReceiver(const FString&, const FString&, FAudioHandler) override;
+    virtual bool ConfigureVideoReceiver(const FString&, const FString&, FVideoHandler) override;
+    void ConfigureRemoteTrack(void* Participant, void* Publication);
     virtual void PublishData(
         const FString& OperationId,
         const TArray<uint8>& Data,
@@ -102,4 +107,12 @@ private:
     FRpcInvocationHandler RpcInvocationHandler;
     FRpcResultHandler RpcResultHandler;
     FPublishResultHandler PublishResultHandler;
+    FString AudioParticipant;
+    FString AudioTrack;
+    FString VideoParticipant;
+    FString VideoTrack;
+    FVideoHandler VideoHandler;
+    TAtomic<bool> bMicrophoneCapturing{false};
+    TAtomic<uint64> MicrophoneRequest{0};
+    TAtomic<bool> bVideoPending{false};
 };

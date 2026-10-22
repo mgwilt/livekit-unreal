@@ -1,6 +1,9 @@
 #include "LiveKitWindowsBridgeInternal.h"
 
 #include "LiveKitBridgeModule.h"
+#if WITH_LIVEKIT_WINDOWS || WITH_LIVEKIT_LINUX
+#include "LiveKitVideo.h"
+#endif
 
 using namespace LiveKitWindowsBridgeInternal;
 
@@ -342,6 +345,17 @@ void FLiveKitWindowsBridge::Connect(
                 }
             }
 #endif
+            {
+                const auto Person = ToAdapterString(Bridge.VideoParticipant);
+                const auto Track = ToAdapterString(Bridge.VideoTrackName);
+                if (lkub_video_configure(Room, ToAdapterView(Person), ToAdapterView(Track), &Result) != LKUB_STATUS_OK)
+                {
+                    Bridge.ErrorHandler(AdapterError(TEXT("video_receiver_failed"), Result));
+                    CleanupRoom();
+                    Bridge.StateHandler(ELiveKitConnectionState::Failed);
+                    return;
+                }
+            }
             Result = {};
             if (lkub_room_prepare_audio(Room, &Result) != LKUB_STATUS_OK)
             {

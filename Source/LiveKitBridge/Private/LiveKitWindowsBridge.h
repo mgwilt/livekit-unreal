@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Containers/Ticker.h"
+#include <atomic>
 #include "LiveKitPlatformBridge.h"
 
 class FLiveKitWindowsBridge final
@@ -23,6 +24,15 @@ public:
         FRpcResultHandler InRpcResultHandler,
         FPublishResultHandler InPublishResultHandler);
     virtual bool ConfigureAudioReceiver(const FString& Participant, const FString& TrackName, FAudioHandler Handler) override;
+    virtual bool ConfigureVideoReceiver(const FString&, const FString&, FVideoHandler) override;
+    virtual bool StartVideoPublisher(int32, int32, int32, int32) override;
+    virtual bool PublishVideoFrame(const FLiveKitVideoFrame&) override;
+    virtual bool PublishOutputAudio(const FLiveKitAudioFrame&) override;
+    void TickVideo();
+    FString VideoParticipant, VideoTrackName;
+    FVideoHandler VideoHandler;
+    TAtomic<bool> VideoPending{false};
+    std::atomic<int32> AudioPending{0};
     bool TickAudio(float DeltaTime);
     FTSTicker::FDelegateHandle AudioTicker;
     FString AudioParticipant;
